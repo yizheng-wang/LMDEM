@@ -1,0 +1,12 @@
+streamlit>=1.28.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+scipy>=1.10.0
+torch>=2.0.0
+meshio
+openai>=1.0.0
+pydantic>=2.0.0
+# Optional LLM providers (install only if needed)
+anthropic>=0.18.0  # For Claude API
+google-generativeai>=0.3.0  # For Google Gemini API
+requests>=2.31.0  # For Ollama API (may already be installed via other packages)
