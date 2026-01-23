@@ -6608,7 +6608,7 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
 
     with right:
         # Minimal header; keep it compact like ChatGPT
-        st.caption("Enter your request and press Enter: auto-generate/edit `.geo`, then auto-generate/load `.msh` (auto-repair on failure, up to 9 attempts).")
+        st.caption("Enter your request and press Enter: auto-generate/edit `.geo`, then auto-generate/load `.msh` (auto-repair on failure: 5 rounds × 2 repairs = 10 attempts).")
         if not _llm_ready:
             current_provider = st.session_state.get("llm_provider", "openai")
             env_var_map = {
@@ -6836,33 +6836,71 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
                 geo_in = st.session_state.get("geo_text", "") or ""
                 # Include boundary placement directive so repairs can move Gamma_u/Gamma_t if needed
                 log_in = _truncate(str(manual_log) + _bc_directive_text(), 8000)
-                # try multiple repair rounds, each time feeding back why validation failed
-                for attempt in range(1, 10):
-                    with st.spinner(f"LLM repairing .geo (attempt {attempt}/9)..."):
-                        chat_fix, geo_fixed = llm_fix_geo_with_gmsh_log(
-                            geo_in,
-                            log_in
-                            + f"\n\n(Attempt {attempt}/9) Return a FULL corrected .geo.",
-                            geo_dim=int(geo_dim),
+                # Manual repair: 2 repairs per round, 5 rounds (same as auto-repair)
+                _repairs_per_round = 2
+                _max_regeneration_rounds = 5
+                repaired_ok = False
+                
+                for round_num in range(1, _max_regeneration_rounds + 1):
+                    if round_num > 1:
+                        # Regenerate fresh .geo
+                        st.session_state["geo_messages"].append(
+                            {"role": "assistant", "content": f"🔄 Round {round_num}/{_max_regeneration_rounds}: Regenerating a fresh .geo..."}
                         )
-                    ok2, msg2 = validate_geo_text(geo_fixed, require_gamma_t=require_gt, dim=int(geo_dim))
-                    st.session_state["geo_messages"].append(
-                        {"role": "user", "content": f"[Manual repair] attempt {attempt}/9\n\n{_truncate(str(manual_log), 1200)}"}
-                    )
-                    if chat_fix and chat_fix.strip():
-                        st.session_state["geo_messages"].append({"role": "assistant", "content": chat_fix})
-                    if ok2:
-                        st.session_state["geo_text"] = geo_fixed
-                        st.session_state["geo_messages"].append({"role": "assistant", "content": "✅ Repair succeeded: written back to the `.geo` editor."})
-                        _geo_chat_save_current()
-                        st.rerun()
-                    else:
-                        st.session_state["geo_messages"].append({"role": "assistant", "content": f"❌ Repair result is still invalid: {msg2}"})
-                        # feed back the validation failure for next attempt
-                        geo_in = geo_fixed or geo_in
-                        log_in = _truncate(str(manual_log) + f"\n\nValidation failed: {msg2}\nPlease fix accordingly.", 8000)
+                        try:
+                            with st.spinner(f"Regenerating .geo (round {round_num}/{_max_regeneration_rounds})..."):
+                                regen_prompt = (
+                                    f"Please regenerate a correct {int(geo_dim)}D Gmsh .geo.\n"
+                                    f"Error log: {_truncate(str(manual_log), 4000)}\n"
+                                    "Ensure it generates a valid mesh with proper Physical groups."
+                                )
+                                regen_prompt = regen_prompt + _bc_directive_text()
+                                chat_regen, geo_in = llm_generate_geo_from_nl(
+                                    regen_prompt,
+                                    default_lc=float(st.session_state.get("lc_ui", 0.15)),
+                                    geo_dim=int(geo_dim),
+                                    base_geo="",
+                                    base_nl=st.session_state.get("last_llm_nl", ""),
+                                )
+                                if chat_regen and chat_regen.strip():
+                                    st.session_state["geo_messages"].append({"role": "assistant", "content": chat_regen})
+                                log_in = _truncate(str(manual_log) + _bc_directive_text(), 8000)
+                        except Exception as e_regen:
+                            st.session_state["geo_messages"].append(
+                                {"role": "assistant", "content": f"❌ Regeneration failed: {str(e_regen)}"}
+                            )
+                            continue
+                    
+                    # Repair attempts within this round
+                    for repair_attempt in range(1, _repairs_per_round + 1):
+                        with st.spinner(f"Round {round_num}/{_max_regeneration_rounds}, Repair {repair_attempt}/{_repairs_per_round}..."):
+                            chat_fix, geo_fixed = llm_fix_geo_with_gmsh_log(
+                                geo_in,
+                                log_in + f"\n\nRound {round_num}/{_max_regeneration_rounds}, Repair {repair_attempt}/{_repairs_per_round}. Return a FULL corrected .geo.",
+                                geo_dim=int(geo_dim),
+                            )
+                        ok2, msg2 = validate_geo_text(geo_fixed, require_gamma_t=require_gt, dim=int(geo_dim))
+                        st.session_state["geo_messages"].append(
+                            {"role": "user", "content": f"[Manual repair] Round {round_num}, Repair {repair_attempt}/{_repairs_per_round}\n\n{_truncate(str(manual_log), 1200)}"}
+                        )
+                        if chat_fix and chat_fix.strip():
+                            st.session_state["geo_messages"].append({"role": "assistant", "content": chat_fix})
+                        if ok2:
+                            st.session_state["geo_text"] = geo_fixed
+                            st.session_state["geo_messages"].append({"role": "assistant", "content": f"✅ Repair succeeded (Round {round_num}, Repair {repair_attempt}): written back to the `.geo` editor."})
+                            _geo_chat_save_current()
+                            repaired_ok = True
+                            st.rerun()
+                        else:
+                            st.session_state["geo_messages"].append({"role": "assistant", "content": f"❌ Round {round_num}, Repair {repair_attempt}: Invalid .geo: {msg2}"})
+                            geo_in = geo_fixed or geo_in
+                            log_in = _truncate(str(manual_log) + f"\n\nValidation failed: {msg2}\nPlease fix accordingly.", 8000)
+                    
+                    if repaired_ok:
+                        break
 
-                st.error("Repair failed after 9 attempts. Try 'Regenerate .geo' (or paste a fuller Gmsh log).")
+                if not repaired_ok:
+                    st.error(f"Repair failed after {_max_regeneration_rounds} rounds × {_repairs_per_round} repairs = {_max_regeneration_rounds * _repairs_per_round} attempts. Try 'Regenerate .geo' (or paste a fuller Gmsh log).")
 
         if do_manual_regen:
             if not str(manual_log).strip():
@@ -6939,7 +6977,8 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
         # NOTE: gmsh_cmdline / gmsh_extra_args are bound to sidebar widgets via keys.
         # Do not manually write them into session_state here, otherwise Streamlit raises
         # StreamlitAPIException ("cannot set session_state for a widget key").
-        _max_repair_attempts = 9
+        _repairs_per_round = 2  # Repair attempts per regeneration round
+        _max_regeneration_rounds = 5  # Maximum number of regeneration rounds
         if _auto_gen:
             st.session_state["geo_messages"].append({"role": "user", "content": "Auto: generate .msh and load from the newly generated .geo."})
         else:
@@ -6971,59 +7010,102 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
 
         except Exception as e1:
             err_text = str(e1)
-            st.warning(f"Gmsh failed. Trying automatic repair (LLM, up to {_max_repair_attempts} attempts)...")
+            st.warning(f"Gmsh failed. Trying automatic repair (LLM, {_max_regeneration_rounds} rounds × {_repairs_per_round} repairs = up to {_max_regeneration_rounds * _repairs_per_round} attempts)...")
 
-            gmsh_log_for_llm = err_text  # RuntimeError includes log
-            geo_try = geo_text
-            last_err = err_text
+            initial_nl = st.session_state.get("last_llm_nl", "")
             repaired_ok = False
 
-            for attempt in range(1, int(_max_repair_attempts) + 1):
-                try:
-                    with st.spinner(f"LLM repairing .geo (attempt {attempt}/{int(_max_repair_attempts)})..."):
-                        chat_fix, geo_fixed = llm_fix_geo_with_gmsh_log(
-                            geo_try,
-                            _truncate(
-                                gmsh_log_for_llm
-                                + _bc_directive_text()
-                                + f"\n\nAttempt {attempt}/{int(_max_repair_attempts)}. Fix the issues and return full .geo.",
-                                8000,
-                            ),
-                            geo_dim=int(geo_dim),
-                        )
-
-                    ok2, msg2 = validate_geo_text(geo_fixed, require_gamma_t=(problem_type != "Poisson (scalar)"), dim=int(geo_dim))
-                    if not ok2:
+            # Outer loop: regeneration rounds (restart with fresh .geo generation)
+            for round_num in range(1, _max_regeneration_rounds + 1):
+                if round_num > 1:
+                    # Regenerate a fresh .geo from scratch (new conversation context)
+                    st.session_state["geo_messages"].append(
+                        {"role": "assistant", "content": f"🔄 Round {round_num}/{_max_regeneration_rounds}: Regenerating a fresh .geo from scratch..."}
+                    )
+                    try:
+                        with st.spinner(f"Regenerating .geo (round {round_num}/{_max_regeneration_rounds})..."):
+                            regen_prompt = (
+                                f"Please regenerate a correct {int(geo_dim)}D Gmsh .geo.\n"
+                                f"Previous error: {_truncate(err_text, 4000)}\n"
+                                f"Original request: {_truncate(initial_nl, 2000) if initial_nl else 'N/A'}\n"
+                                "Ensure it generates a valid mesh with proper Physical groups."
+                            )
+                            regen_prompt = regen_prompt + _bc_directive_text()
+                            chat_regen, geo_text = llm_generate_geo_from_nl(
+                                regen_prompt,
+                                default_lc=float(st.session_state.get("lc_ui", 0.15)),
+                                geo_dim=int(geo_dim),
+                                base_geo="",  # Start fresh
+                                base_nl=initial_nl,
+                            )
+                            if chat_regen and chat_regen.strip():
+                                st.session_state["geo_messages"].append({"role": "assistant", "content": chat_regen})
+                            geo_text = upsert_lc_in_geo(geo_text, float(st.session_state.get("lc_ui", 0.15)))
+                            st.session_state["geo_text"] = geo_text
+                    except Exception as e_regen:
                         st.session_state["geo_messages"].append(
-                            {"role": "assistant", "content": f"❌ Repair attempt {attempt}/{int(_max_repair_attempts)} invalid .geo: {msg2}"}
+                            {"role": "assistant", "content": f"❌ Regeneration failed: {str(e_regen)}"}
                         )
-                        geo_try = geo_fixed or geo_try
-                        gmsh_log_for_llm = last_err + f"\n\nValidation failed: {msg2}"
                         continue
 
-                    with st.spinner(f"Retrying Gmsh with repaired .geo (attempt {attempt}/{int(_max_repair_attempts)})..."):
-                        msh_bytes, gmsh_log = _run_once(geo_fixed)
+                # Inner loop: repair attempts within this round
+                geo_try = geo_text
+                gmsh_log_for_llm = err_text
+                last_err = err_text
 
-                    # success
-                    st.session_state["geo_text"] = geo_fixed
-                    if chat_fix and chat_fix.strip():
-                        st.session_state["geo_messages"].append({"role": "assistant", "content": chat_fix})
-                    repaired_ok = True
+                for repair_attempt in range(1, _repairs_per_round + 1):
+                    try:
+                        with st.spinner(f"Round {round_num}/{_max_regeneration_rounds}, Repair {repair_attempt}/{_repairs_per_round}..."):
+                            chat_fix, geo_fixed = llm_fix_geo_with_gmsh_log(
+                                geo_try,
+                                _truncate(
+                                    gmsh_log_for_llm
+                                    + _bc_directive_text()
+                                    + f"\n\nRound {round_num}/{_max_regeneration_rounds}, Repair {repair_attempt}/{_repairs_per_round}. Fix the issues and return full .geo.",
+                                    8000,
+                                ),
+                                geo_dim=int(geo_dim),
+                            )
+
+                        ok2, msg2 = validate_geo_text(geo_fixed, require_gamma_t=(problem_type != "Poisson (scalar)"), dim=int(geo_dim))
+                        if not ok2:
+                            st.session_state["geo_messages"].append(
+                                {"role": "assistant", "content": f"❌ Round {round_num}, Repair {repair_attempt}/{_repairs_per_round}: Invalid .geo: {msg2}"}
+                            )
+                            geo_try = geo_fixed or geo_try
+                            gmsh_log_for_llm = last_err + f"\n\nValidation failed: {msg2}"
+                            continue
+
+                        with st.spinner(f"Testing repaired .geo (Round {round_num}, Repair {repair_attempt}/{_repairs_per_round})..."):
+                            msh_bytes, gmsh_log = _run_once(geo_fixed)
+
+                        # success
+                        st.session_state["geo_text"] = geo_fixed
+                        if chat_fix and chat_fix.strip():
+                            st.session_state["geo_messages"].append({"role": "assistant", "content": chat_fix})
+                        st.session_state["geo_messages"].append(
+                            {"role": "assistant", "content": f"✅ Success! Round {round_num}, Repair {repair_attempt}/{_repairs_per_round} succeeded."}
+                        )
+                        repaired_ok = True
+                        break
+
+                    except Exception as e2:
+                        last_err = str(e2)
+                        st.session_state["geo_messages"].append(
+                            {
+                                "role": "assistant",
+                                "content": f"❌ Round {round_num}, Repair {repair_attempt}/{_repairs_per_round} failed:\n{_truncate(last_err, 1800)}",
+                            }
+                        )
+                        gmsh_log_for_llm = last_err
+                        geo_try = geo_fixed if 'geo_fixed' in locals() else geo_try
+
+                if repaired_ok:
                     break
-
-                except Exception as e2:
-                    last_err = str(e2)
-                    st.session_state["geo_messages"].append(
-                        {
-                            "role": "assistant",
-                            "content": f"❌ Repair attempt {attempt}/{int(_max_repair_attempts)} failed:\n{_truncate(last_err, 1800)}",
-                        }
-                    )
-                    gmsh_log_for_llm = last_err
 
             if not repaired_ok:
                 st.error(
-                    f"❌ Automatic repair failed after {int(_max_repair_attempts)} attempts. "
+                    f"❌ Automatic repair failed after {_max_regeneration_rounds} rounds × {_repairs_per_round} repairs = {_max_regeneration_rounds * _repairs_per_round} total attempts. "
                     "Use the manual repair panel to paste the full log and retry."
                 )
                 st.stop()
