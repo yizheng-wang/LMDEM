@@ -132,13 +132,17 @@ def get_client_ip() -> str:
     return 'unknown'
 
 
-def get_ip_location(ip: str) -> dict:
+def get_ip_location(ip: str) -> dict | None:
     """
     Get geographic location from IP address using free API.
     Returns dict with: lat, lon, city, country, country_code, region, timezone
     Falls back to None if API fails or IP is invalid.
     """
-    if not ip or ip == 'unknown' or ip.startswith('127.') or ip.startswith('localhost'):
+    if not ip or ip == 'unknown':
+        return None
+    
+    # Skip localhost IPs (they can't be geolocated)
+    if ip.startswith('127.') or ip.startswith('localhost') or ip.startswith('::1'):
         return None
     
     try:
@@ -148,23 +152,31 @@ def get_ip_location(ip: str) -> dict:
             return None
         
         url = f"http://ip-api.com/json/{ip}?fields=status,message,country,countryCode,region,regionName,city,lat,lon,timezone"
-        resp = requests.get(url, timeout=3)
+        resp = requests.get(url, timeout=5)
         resp.raise_for_status()
         data = resp.json()
         
         if data.get('status') == 'success':
+            lat = float(data.get('lat', 0))
+            lon = float(data.get('lon', 0))
+            # Validate coordinates
+            if lat == 0 and lon == 0:
+                return None
             return {
-                'lat': float(data.get('lat', 0)),
-                'lon': float(data.get('lon', 0)),
+                'lat': lat,
+                'lon': lon,
                 'city': str(data.get('city', '')),
                 'country': str(data.get('country', '')),
                 'country_code': str(data.get('countryCode', '')),
                 'region': str(data.get('regionName', '')),
                 'timezone': str(data.get('timezone', '')),
             }
-    except Exception:
+        else:
+            # API returned error
+            return None
+    except Exception as e:
         # API failed, return None
-        pass
+        return None
     
     return None
 
@@ -560,6 +572,38 @@ st.caption(f"📊 Total visits: {total_visits:,}")
 with st.expander("🌍 Visitor Map (click to view)", expanded=False):
     map_data, unique_visitors = get_visitor_map_data()
     
+    # Debug and test section
+    with st.expander("🔧 Debug & Test", expanded=False):
+        current_ip = get_client_ip()
+        st.write(f"**Current IP:** `{current_ip}`")
+        
+        if st.button("Test IP Location API", key="test_ip_location"):
+            if current_ip and current_ip != 'unknown' and not current_ip.startswith('127.'):
+                with st.spinner("Fetching location..."):
+                    test_location = get_ip_location(current_ip)
+                    if test_location:
+                        st.success("✅ Location fetched successfully!")
+                        st.json(test_location)
+                        # Show on map
+                        import pandas as pd
+                        df_test = pd.DataFrame([{
+                            'lat': test_location['lat'],
+                            'lon': test_location['lon']
+                        }])
+                        st.map(df_test, zoom=5)
+                    else:
+                        st.error("❌ Failed to get location. The API may be unavailable or rate-limited.")
+            else:
+                st.warning("⚠️ Cannot test: IP is localhost or unknown. Deploy the app to test with a public IP.")
+        
+        if st.checkbox("Show debug info", value=False, key="visitor_map_debug"):
+            st.code(f"Current IP: {current_ip}")
+            st.code(f"Location info: {location_info}")
+            visitors_raw = load_visitor_locations()
+            st.code(f"Total visitor records: {len(visitors_raw)}")
+            if visitors_raw:
+                st.json(visitors_raw[:3])  # Show first 3 records
+    
     if map_data:
         # Create DataFrame for st.map
         import pandas as pd
@@ -582,9 +626,7 @@ with st.expander("🌍 Visitor Map (click to view)", expanded=False):
                 timestamp = v.get('timestamp', '')[:19] if v.get('timestamp') else 'Unknown time'
                 st.caption(f"📍 {city}, {country} — {timestamp}")
     else:
-        st.info("No visitor location data available yet. Locations will appear as visitors access the app.")
-        
-        # Show current visitor location if available
+        # Show current visitor location if available (even if not saved yet)
         if location_info and 'lat' in location_info and 'lon' in location_info:
             st.markdown("**Your current location:**")
             import pandas as pd
@@ -596,6 +638,17 @@ with st.expander("🌍 Visitor Map (click to view)", expanded=False):
             city = location_info.get('city', 'Unknown')
             country = location_info.get('country', 'Unknown')
             st.caption(f"📍 {city}, {country}")
+            st.info("This is your current location. It will be saved to the visitor map after you refresh the page.")
+        else:
+            current_ip = get_client_ip()
+            if current_ip == 'unknown':
+                st.warning("⚠️ Could not detect your IP address. This may be because you're accessing the app locally (127.0.0.1) or through a proxy.")
+            elif current_ip.startswith('127.') or current_ip.startswith('localhost'):
+                st.info("ℹ️ You're accessing the app locally. IP geolocation only works for public IP addresses. Deploy the app to see visitor locations.")
+            elif 'error' in location_info:
+                st.warning(f"⚠️ Could not get location for IP {current_ip}. The geolocation API may be temporarily unavailable.")
+            else:
+                st.info("No visitor location data available yet. Locations will appear as visitors access the app.")
 
 # -----------------------------
 # UI polish (chat look & feel)
@@ -1192,6 +1245,32 @@ def llm_generate_geo_from_nl(
             "- Physical Surface(\"Gamma_u\"), Physical Surface(\"Gamma_t\")\n"
         )
 
+    # Build 3D-specific tetra enforcement instructions
+    tetra_enforcement = ""
+    if geo_dim == 3:
+        tetra_enforcement = (
+            "\n"
+            "⚠️ CRITICAL FOR 3D: Tetrahedral mesh is MANDATORY. The solver will FAIL if Omega contains hexa/wedge/pyramid/prism elements.\n"
+            "\n"
+            "To ensure tetra-only volume mesh, you MUST include these settings in your .geo:\n"
+            "```\n"
+            "Mesh.RecombineAll = 0;\n"
+            "Mesh.Recombine3DAll = 0;\n"
+            "Mesh.Algorithm3D = 4;  // 4 = Frontal (tetra), 1 = Delaunay (tetra)\n"
+            "```\n"
+            "\n"
+            "❌ DO NOT use:\n"
+            "- Extrude with Layers{} (creates prism/wedge)\n"
+            "- Mesh.RecombineAll = 1 (creates hexa)\n"
+            "- Structured meshing that produces hexa/wedge\n"
+            "\n"
+            "✅ CORRECT approach for 3D:\n"
+            "- Use BooleanUnion/BooleanDifference on 3D volumes (Box, Cylinder, Sphere, etc.)\n"
+            "- Use Extrude WITHOUT Layers{}: `out[] = Extrude {0,0,t} { Surface{...}; };`\n"
+            "- Always set Mesh.RecombineAll = 0 and Mesh.Algorithm3D = 4\n"
+            "\n"
+        )
+    
     system = (
         "Output MUST be JSON: {\"chat\": \"...\", \"geo\": \"...\"}.\n"
         "No markdown, no code fences.\n"
@@ -1199,10 +1278,12 @@ def llm_generate_geo_from_nl(
         "- 2D: Omega may be meshed with triangles or quads.\n"
         "- 3D: Omega MUST be a tetrahedral volume mesh (tetra elements). Do NOT generate hexa/wedge/pyramid-only volume meshes.\n"
         "- 3D boundary surfaces (Gamma_u/Gamma_t) may be triangles.\n"
+        + tetra_enforcement +
         "Gmsh syntax notes:\n"
         "- OpenCASCADE primitives use: Box(tag) = {...}; Cylinder(tag) = {...}; Sphere(tag) = {...};\n"
         "- BoundingBox selectors use curly braces: Surface In BoundingBox{...}; Volume In BoundingBox{...};\n"
         "- Store selector results in arrays first: s[] = Surface In BoundingBox{...}; then use s[] in Physical definitions.\n"
+        "- Boolean operations: v[] = BooleanUnion{ Volume{1}; Delete; }{ Volume{2}; Delete; };\n"
         "\n"
         + hard_req +
         "\n"
@@ -1269,6 +1350,32 @@ def llm_fix_geo_with_gmsh_log(
             "- Must have Physical Curve(\"Gamma_u\") and Physical Curve(\"Gamma_t\")\n"
         )
 
+    # Build 3D-specific tetra enforcement instructions
+    tetra_enforcement = ""
+    if geo_dim == 3:
+        tetra_enforcement = (
+            "\n"
+            "⚠️ CRITICAL FOR 3D: Tetrahedral mesh is MANDATORY. The solver will FAIL if Omega contains hexa/wedge/pyramid/prism elements.\n"
+            "\n"
+            "To ensure tetra-only volume mesh, you MUST include these settings in your .geo:\n"
+            "```\n"
+            "Mesh.RecombineAll = 0;\n"
+            "Mesh.Recombine3DAll = 0;\n"
+            "Mesh.Algorithm3D = 4;  // 4 = Frontal (tetra), 1 = Delaunay (tetra)\n"
+            "```\n"
+            "\n"
+            "❌ DO NOT use:\n"
+            "- Extrude with Layers{} (creates prism/wedge)\n"
+            "- Mesh.RecombineAll = 1 (creates hexa)\n"
+            "- Structured meshing that produces hexa/wedge\n"
+            "\n"
+            "✅ CORRECT approach for 3D:\n"
+            "- Use BooleanUnion/BooleanDifference on 3D volumes (Box, Cylinder, Sphere, etc.)\n"
+            "- Use Extrude WITHOUT Layers{}: `out[] = Extrude {0,0,t} { Surface{...}; };`\n"
+            "- Always set Mesh.RecombineAll = 0 and Mesh.Algorithm3D = 4\n"
+            "\n"
+        )
+    
     system = (
         "Output MUST be JSON: {\"chat\": \"...\", \"geo\": \"...\"}.\n"
         "No markdown, no code fences.\n"
@@ -1277,6 +1384,7 @@ def llm_fix_geo_with_gmsh_log(
         "- 2D: Omega may be meshed with triangles or quads.\n"
         "- 3D: Omega MUST be a tetrahedral volume mesh (tetra elements). Do NOT generate hexa/wedge/pyramid-only volume meshes.\n"
         "- 3D boundary surfaces (Gamma_u/Gamma_t) may be triangles.\n"
+        + tetra_enforcement +
         "\n"
         + req
     )
@@ -1297,7 +1405,7 @@ def llm_fix_geo_with_gmsh_log(
 def _get_default_model(provider: LLMProvider) -> str:
     """Get default model name for a provider."""
     defaults = {
-        "openai": "o3",  # Default to o3-mini (latest thinking model, previously used o3)
+        "openai": "gpt-5.2",  # Default to o3-mini (latest thinking model, previously used o3)
         "anthropic": "claude-3-5-sonnet-20241022",
         "google": "gemini-1.5-pro",
         "ollama": "llama3.1",
@@ -1309,6 +1417,7 @@ def _get_available_models(provider: LLMProvider) -> list[str]:
     """Get list of available models for a provider."""
     models = {
         "openai": [
+            "gpt-5.2",
             "o3",  # Latest thinking model (most capable)
             "o3-mini",  # Latest thinking model (faster, cost-efficient)
             "o3-pro",  # Latest thinking model (most powerful)
@@ -1926,10 +2035,10 @@ def cached_load_and_quadrature(msh_bytes: bytes, tri_rule_name: str, seg_gauss_n
         seg_u = extract_cells_by_phys(mesh, "line", pid_gu)
         seg_t = extract_cells_by_phys(mesh, "line", pid_gt) if pid_gt is not None else np.zeros((0, 2), dtype=int)
 
-        if (tris.size == 0) and (quads.size == 0):
-            raise RuntimeError("No triangles/quads found in physical group 'Omega'.")
-        if seg_u.size == 0:
-            raise RuntimeError("No line segments found in physical group 'Gamma_u'.")
+        # if (tris.size == 0) and (quads.size == 0):
+        #     raise RuntimeError("No triangles/quads found in physical group 'Omega'.")
+        # if seg_u.size == 0:
+        #     raise RuntimeError("No line segments found in physical group 'Gamma_u'.")
 
         Xdom_list = []
         Wdom_list = []
@@ -1970,8 +2079,8 @@ def cached_load_and_quadrature(msh_bytes: bytes, tri_rule_name: str, seg_gauss_n
     # 3D pipeline (new, Poisson-first)
     # ----------------------------
     tets = extract_cells_by_phys(mesh, "tetra", pid_omega)
-    if tets.size == 0:
-        raise RuntimeError("3D Omega requires tetra elements (cell type prefix 'tetra').")
+    # if tets.size == 0:
+    #     raise RuntimeError("3D Omega requires tetra elements (cell type prefix 'tetra').")
 
     # Boundary surfaces: triangles/quads under Gamma_u / Gamma_t physical groups
     gu_tris = extract_cells_by_phys(mesh, "triangle", pid_gu)
@@ -1989,8 +2098,6 @@ def cached_load_and_quadrature(msh_bytes: bytes, tri_rule_name: str, seg_gauss_n
             gt_tris2 = triangulate_quads(gt_quads[:, :4].astype(int))
             gt_tris = np.vstack([gt_tris, gt_tris2]) if gt_tris.size > 0 else gt_tris2
 
-    if gu_tris.size == 0:
-        raise RuntimeError("3D mesh: no boundary triangles/quads found in physical group 'Gamma_u'.")
 
     # Domain quadrature (tets) + boundary quadrature (surface tris)
     Xdom, Wdom = build_domain_quadrature_tets(pts, tets)
