@@ -5288,7 +5288,6 @@ def plot_mesh_preview_3d_surfaces(
 
     P = np.asarray(pts)
     if P.size == 0:
-        ax.set_title("3D Mesh Preview (empty)")
         return fig
 
     # point cloud (subsample for speed)
@@ -5328,45 +5327,38 @@ def plot_mesh_preview_3d_surfaces(
 
     # Always try to show the remaining outer surface (outer surface minus Gamma_u/Gamma_t),
     # so 3D bodies (e.g., a cylinder side wall) are visible even when Gamma_u/Gamma_t exist.
-    try:
-        has_gu = gu_tris is not None and np.asarray(gu_tris).size > 0
-        has_gt = gt_tris is not None and np.asarray(gt_tris).size > 0
-        if tets_conn is not None and np.asarray(tets_conn).size > 0:
-            surf = np.asarray(extract_boundary_tris_from_tets(np.asarray(tets_conn)))[:, :3].astype(int)
-            if surf.size > 0:
-                # build normalized "keys" (sorted vertex ids) to subtract Gamma_u/Gamma_t from outer surface
-                surf_s = np.sort(surf, axis=1).astype(np.int64)
-                surf_v = surf_s.view(np.dtype((np.void, surf_s.dtype.itemsize * surf_s.shape[1]))).reshape(-1)
 
-                def _keys_void(tris_in: np.ndarray | None) -> np.ndarray:
-                    Tin = np.asarray(tris_in) if tris_in is not None else np.zeros((0, 3), dtype=np.int64)
-                    if Tin.size == 0:
-                        return np.zeros((0,), dtype=surf_v.dtype)
-                    Tin = Tin[:, :3].astype(np.int64)
-                    Tin_s = np.sort(Tin, axis=1)
-                    return Tin_s.view(np.dtype((np.void, Tin_s.dtype.itemsize * Tin_s.shape[1]))).reshape(-1)
+    has_gu = gu_tris is not None and np.asarray(gu_tris).size > 0
+    has_gt = gt_tris is not None and np.asarray(gt_tris).size > 0
+    if tets_conn is not None and np.asarray(tets_conn).size > 0:
+        surf = np.asarray(extract_boundary_tris_from_tets(np.asarray(tets_conn)))[:, :3].astype(int)
+        if surf.size > 0:
+            # build normalized "keys" (sorted vertex ids) to subtract Gamma_u/Gamma_t from outer surface
+            surf_s = np.sort(surf, axis=1).astype(np.int64)
+            surf_v = surf_s.view(np.dtype((np.void, surf_s.dtype.itemsize * surf_s.shape[1]))).reshape(-1)
 
-                gu_v = _keys_void(gu_tris) if has_gu else np.zeros((0,), dtype=surf_v.dtype)
-                gt_v = _keys_void(gt_tris) if has_gt else np.zeros((0,), dtype=surf_v.dtype)
+            def _keys_void(tris_in: np.ndarray | None) -> np.ndarray:
+                Tin = np.asarray(tris_in) if tris_in is not None else np.zeros((0, 3), dtype=np.int64)
+                if Tin.size == 0:
+                    return np.zeros((0,), dtype=surf_v.dtype)
+                Tin = Tin[:, :3].astype(np.int64)
+                Tin_s = np.sort(Tin, axis=1)
+                return Tin_s.view(np.dtype((np.void, Tin_s.dtype.itemsize * Tin_s.shape[1]))).reshape(-1)
 
-                keep = np.ones((surf.shape[0],), dtype=bool)
-                if gu_v.size > 0:
-                    keep &= ~np.isin(surf_v, gu_v)
-                if gt_v.size > 0:
-                    keep &= ~np.isin(surf_v, gt_v)
-                other = surf[keep]
+            gu_v = _keys_void(gu_tris) if has_gu else np.zeros((0,), dtype=surf_v.dtype)
+            gt_v = _keys_void(gt_tris) if has_gt else np.zeros((0,), dtype=surf_v.dtype)
 
-                if other.size > 0:
-                    _add_tris(other, color="tab:blue", label="Other boundary (outer surface)")
+            keep = np.ones((surf.shape[0],), dtype=bool)
+            if gu_v.size > 0:
+                keep &= ~np.isin(surf_v, gu_v)
+            if gt_v.size > 0:
+                keep &= ~np.isin(surf_v, gt_v)
+            other = surf[keep]
 
-            if has_gu or has_gt:
-                ax.set_title("3D Mesh Preview (Gamma_u/Gamma_t + other boundary)")
-            else:
-                ax.set_title("3D Mesh Preview (outer surface)")
-        else:
-            ax.set_title("3D Mesh Preview (Gamma_u/Gamma_t surfaces)")
-    except Exception:
-        ax.set_title("3D Mesh Preview")
+            if other.size > 0:
+                _add_tris(other, color="tab:blue", label="Other boundary (outer surface)")
+
+
 
     # bounds + aspect
     xmin, ymin, zmin = np.min(P[:, 0]), np.min(P[:, 1]), np.min(P[:, 2])
@@ -5383,14 +5375,19 @@ def plot_mesh_preview_3d_surfaces(
     ax.set_ylabel("y")
     ax.set_zlabel("z")
     # Put legend on the right side to avoid covering the mesh.
+    # Get all legend handles to determine number of items
+    handles, labels = ax.get_legend_handles_labels()
     ax.legend(
+        handles=handles,
+        labels=labels,
         loc="upper left",
-        bbox_to_anchor=(1.02, 1.0),
+        bbox_to_anchor=(0.0, 1.1),
         borderaxespad=0.0,
         frameon=True,
+        ncol=len(handles) if len(handles) > 0 else 1,  # Horizontal layout: place items side by side
     )
     # Reserve space on the right for the legend (avoid clipping).
-    fig.tight_layout(rect=[0.0, 0.0, 0.80, 1.0])
+    fig.tight_layout(rect=[0.0, 0.0, 1.00, 1.0])
     return fig
 
 
@@ -5585,6 +5582,7 @@ def plot_3d_scalar_surface_cloud(
 def plot_mesh_with_boundaries_fast(pts, tris, seg_u, seg_t, quads=None, omega_triangles_n: int | None = None):
     """
     Faster + deterministic boundary colors.
+    Simple view fitting - just use the actual geometry bounds.
     """
     # Keep preview compact in Streamlit "wide" layout
     fig, ax = plt.subplots(figsize=(3.8, 3.8), dpi=120)
@@ -5616,18 +5614,6 @@ def plot_mesh_with_boundaries_fast(pts, tris, seg_u, seg_t, quads=None, omega_tr
         lc_q = LineCollection(segs_xy, colors="0.35", linewidths=0.6, alpha=0.8, zorder=1)
         ax.add_collection(lc_q)
 
-    # Ensure the view includes both triangles and quads (collections don't always autoscale)
-    if pts is not None and np.asarray(pts).size > 0:
-        x = np.asarray(pts)[:, 0]
-        y = np.asarray(pts)[:, 1]
-        xmin, xmax = float(np.min(x)), float(np.max(x))
-        ymin, ymax = float(np.min(y)), float(np.max(y))
-        sx = max(xmax - xmin, 1e-12)
-        sy = max(ymax - ymin, 1e-12)
-        pad = 0.02 * max(sx, sy)
-        ax.set_xlim(xmin - pad, xmax + pad)
-        ax.set_ylim(ymin - pad, ymax + pad)
-
     # Gamma_u (Dirichlet) in RED
     if seg_u is not None and seg_u.size > 0:
         segs_u_xy = pts[seg_u[:, :2]]  # (nseg, 2, 2)
@@ -5650,29 +5636,71 @@ def plot_mesh_with_boundaries_fast(pts, tris, seg_u, seg_t, quads=None, omega_tr
         )
         ax.add_collection(lc_t)
 
+    # Force matplotlib to update view limits based on all drawn elements
+    # LineCollection doesn't auto-update limits, so we need to do it manually
+
+    
+    # Get the auto-scaled limits to verify they're correct
+    xlim_auto = ax.get_xlim()
+    ylim_auto = ax.get_ylim()
+    
+    # If limits are default (0,1), recalculate from actual data
+    if pts is not None and np.asarray(pts).size > 0:
+        pts_arr = np.asarray(pts)
+        if pts_arr.shape[0] > 0:
+            xmin_data = float(np.min(pts_arr[:, 0]))
+            xmax_data = float(np.max(pts_arr[:, 0]))
+            ymin_data = float(np.min(pts_arr[:, 1]))
+            ymax_data = float(np.max(pts_arr[:, 1]))
+            
+            # Check if auto limits are wrong (e.g., default 0-1)
+            if (xlim_auto[0] == 0.0 and xlim_auto[1] == 1.0 and 
+                (xmin_data < 0 or xmax_data > 1 or abs(xmin_data) > 0.1 or abs(xmax_data - 1) > 0.1)):
+                # Auto limits are wrong, use data limits
+                sx = max(xmax_data - xmin_data, 1e-12)
+                sy = max(ymax_data - ymin_data, 1e-12)
+                pad_x = sx
+                pad_y = sy
+                ax.set_xlim(xmin_data, xmax_data)
+                ax.set_ylim(ymin_data, ymax_data)
+            elif (ylim_auto[0] == 0.0 and ylim_auto[1] == 1.0 and 
+                  (ymin_data < 0 or ymax_data > 1 or abs(ymin_data) > 0.1 or abs(ymax_data - 1) > 0.1)):
+                # Auto limits are wrong, use data limits
+                sx = max(xmax_data - xmin_data, 1e-12)
+                sy = max(ymax_data - ymin_data, 1e-12)
+                pad_x = sx
+                pad_y = sy
+                ax.set_xlim(xmin_data, xmax_data)
+                ax.set_ylim(ymin_data, ymax_data)
+    
+    # Set equal aspect - same as contour plots
+    ax.set_aspect("equal", adjustable="box")
+    
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.grid(True, alpha=0.2, linestyle="--")
+    
     # legend (use explicit handles, so colors never get messed up)
+    # Place legend above the plot, outside the plot area
     handles = []
     if seg_u is not None and seg_u.size > 0:
         handles.append(Line2D([0], [0], color="tab:red", lw=2.5, label="Gamma_u"))
     if seg_t is not None and seg_t.size > 0:
         handles.append(Line2D([0], [0], color="tab:green", lw=2.5, label="Gamma_t"))
     if handles:
-        # Put legend on the right side (use the empty horizontal space in wide layouts).
-        ax.legend(
+        # Put legend above the plot, well above the plot area to avoid overlap
+        # ncol=len(handles) ensures horizontal (left-right) layout
+        legend = ax.legend(
             handles=handles,
-            loc="upper left",
-            bbox_to_anchor=(1.02, 1.0),
-            borderaxespad=0.0,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.42),  # Higher position to avoid overlap
             frameon=True,
+            ncol=len(handles),  # Horizontal layout: place items side by side
         )
-
-    ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_title("Mesh + Physical Boundaries")
-    ax.grid(True, alpha=0.2, linestyle="--")
-    # Reserve some space on the right for the legend (avoid clipping).
-    fig.tight_layout(rect=[0.0, 0.0, 0.80, 1.0])
+        # Ensure legend doesn't overlap with plot content
+        fig.canvas.draw()  # Update layout
+    
+    
     return fig
     
 @torch.no_grad()
@@ -6973,51 +7001,73 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
         st.rerun()
 
     _auto_gen = bool(st.session_state.pop("auto_geo_to_msh", False))
-    if do_gen or _auto_gen:
+    _auto_retry = bool(st.session_state.pop("auto_retry_mesh_error", False))
+    if do_gen or _auto_gen or _auto_retry:
         # NOTE: gmsh_cmdline / gmsh_extra_args are bound to sidebar widgets via keys.
         # Do not manually write them into session_state here, otherwise Streamlit raises
         # StreamlitAPIException ("cannot set session_state for a widget key").
         _repairs_per_round = 2  # Repair attempts per regeneration round
         _max_regeneration_rounds = 5  # Maximum number of regeneration rounds
-        if _auto_gen:
+        if _auto_retry:
+            mesh_err = st.session_state.pop("mesh_error_msg", "Unknown mesh error")
+            st.session_state["geo_messages"].append({
+                "role": "user", 
+                "content": f"Auto-retry: Mesh load failed with error: {mesh_err}. Please regenerate a correct .geo file."
+            })
+        elif _auto_gen:
             st.session_state["geo_messages"].append({"role": "user", "content": "Auto: generate .msh and load from the newly generated .geo."})
         else:
             st.session_state["geo_messages"].append({"role": "user", "content": "Generate mesh from current .geo text."})
         # sync lc from UI into geo_text before validate+run gmsh
         geo_text = upsert_lc_in_geo(geo_text, float(st.session_state.get("lc_ui", 0.15)))
         st.session_state["geo_text"] = geo_text
-        # ---- validate before running gmsh ----
-        ok_geo, msg = validate_geo_text(geo_text, require_gamma_t=(problem_type not in ["Poisson (scalar)", "Screened Poisson equation (2D)"]), dim=int(geo_dim))
-        if not ok_geo:
-            st.error(f".geo validation failed: {msg}")
-            st.session_state["geo_messages"].append({"role": "assistant", "content": f"❌ .geo validation failed: {msg}"})
-            st.stop()
-
-        def _run_once(geo_in: str):
-            msh_bytes, gmsh_log = gmsh_geo_to_msh_bytes(
-                geo_in,
-                gmsh_cmdline=gmsh_cmdline,
-                dim=int(geo_dim),
-                msh_format=str(geo_msh_format),
-                extra_args=str(geo_extra_args),
-                timeout_sec=180,
-            )
-            return msh_bytes, gmsh_log
-
-        try:
-            with st.spinner("Running Gmsh to generate .msh..."):
-                msh_bytes, gmsh_log = _run_once(geo_text)
-
-        except Exception as e1:
-            err_text = str(e1)
-            st.warning(f"Gmsh failed. Trying automatic repair (LLM, {_max_regeneration_rounds} rounds × {_repairs_per_round} repairs = up to {_max_regeneration_rounds * _repairs_per_round} attempts)...")
-
+        
+        # For auto-retry, skip validation and Gmsh run, go directly to regeneration
+        if _auto_retry:
+            # Set up error message for regeneration
+            mesh_err = st.session_state.get("mesh_error_msg", "Mesh load/build error")
+            err_text = mesh_err
             initial_nl = st.session_state.get("last_llm_nl", "")
+            if not initial_nl:
+                initial_nl = "Regenerate a correct .geo file that produces a valid mesh."
             repaired_ok = False
+            st.warning(f"Mesh error detected. Trying automatic regeneration (LLM, {_max_regeneration_rounds} rounds × {_repairs_per_round} repairs = up to {_max_regeneration_rounds * _repairs_per_round} attempts)...")
+        else:
+            # ---- validate before running gmsh ----
+            ok_geo, msg = validate_geo_text(geo_text, require_gamma_t=(problem_type not in ["Poisson (scalar)", "Screened Poisson equation (2D)"]), dim=int(geo_dim))
+            if not ok_geo:
+                st.error(f".geo validation failed: {msg}")
+                st.session_state["geo_messages"].append({"role": "assistant", "content": f"❌ .geo validation failed: {msg}"})
+                st.stop()
 
+            def _run_once(geo_in: str):
+                msh_bytes, gmsh_log = gmsh_geo_to_msh_bytes(
+                    geo_in,
+                    gmsh_cmdline=gmsh_cmdline,
+                    dim=int(geo_dim),
+                    msh_format=str(geo_msh_format),
+                    extra_args=str(geo_extra_args),
+                    timeout_sec=180,
+                )
+                return msh_bytes, gmsh_log
+
+            try:
+                with st.spinner("Running Gmsh to generate .msh..."):
+                    msh_bytes, gmsh_log = _run_once(geo_text)
+
+            except Exception as e1:
+                err_text = str(e1)
+                st.warning(f"Gmsh failed. Trying automatic repair (LLM, {_max_regeneration_rounds} rounds × {_repairs_per_round} repairs = up to {_max_regeneration_rounds * _repairs_per_round} attempts)...")
+
+                initial_nl = st.session_state.get("last_llm_nl", "")
+                repaired_ok = False
+
+        # Regeneration/repair loop (for both auto-retry and Gmsh failures)
+        if _auto_retry or 'repaired_ok' in locals():
             # Outer loop: regeneration rounds (restart with fresh .geo generation)
+            # For auto-retry, always start with regeneration (round 1)
             for round_num in range(1, _max_regeneration_rounds + 1):
-                if round_num > 1:
+                if round_num > 1 or _auto_retry:
                     # Regenerate a fresh .geo from scratch (new conversation context)
                     st.session_state["geo_messages"].append(
                         {"role": "assistant", "content": f"🔄 Round {round_num}/{_max_regeneration_rounds}: Regenerating a fresh .geo from scratch..."}
@@ -7079,7 +7129,7 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
                         with st.spinner(f"Testing repaired .geo (Round {round_num}, Repair {repair_attempt}/{_repairs_per_round})..."):
                             msh_bytes, gmsh_log = _run_once(geo_fixed)
 
-                        # success
+                        # success - store msh_bytes and gmsh_log for later use
                         st.session_state["geo_text"] = geo_fixed
                         if chat_fix and chat_fix.strip():
                             st.session_state["geo_messages"].append({"role": "assistant", "content": chat_fix})
@@ -7087,6 +7137,9 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
                             {"role": "assistant", "content": f"✅ Success! Round {round_num}, Repair {repair_attempt}/{_repairs_per_round} succeeded."}
                         )
                         repaired_ok = True
+                        # Store msh_bytes and gmsh_log in session_state so they're available after the loop
+                        st.session_state["_temp_msh_bytes"] = msh_bytes
+                        st.session_state["_temp_gmsh_log"] = gmsh_log
                         break
 
                     except Exception as e2:
@@ -7109,20 +7162,33 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
                     "Use the manual repair panel to paste the full log and retry."
                 )
                 st.stop()
-
-
+        
         # ---- success path ----
-        st.session_state["generated_msh_bytes"] = msh_bytes
-        st.session_state["generated_msh_name"] = "generated_from_geo.msh"
-        st.session_state.pop("mesh_sig", None)  # force reload
-        # Auto-load the mesh so the preview appears immediately (no need to click Start Training).
-        st.session_state["auto_load_mesh_after_gen"] = True
+        # Get msh_bytes and gmsh_log from either direct generation or repair loop
+        if 'repaired_ok' in locals() and repaired_ok:
+            # Success from repair loop - use stored values
+            msh_bytes = st.session_state.pop("_temp_msh_bytes", None)
+            gmsh_log = st.session_state.pop("_temp_gmsh_log", "")
+        elif not _auto_retry:
+            # Success from direct generation - use existing values
+            pass
+        else:
+            # Should not reach here, but handle gracefully
+            st.error("Unexpected state in mesh generation")
+            st.stop()
+        
+        if msh_bytes is not None:
+            st.session_state["generated_msh_bytes"] = msh_bytes
+            st.session_state["generated_msh_name"] = "generated_from_geo.msh"
+            st.session_state.pop("mesh_sig", None)  # force reload
+            # Auto-load the mesh so the preview appears immediately (no need to click Start Training).
+            st.session_state["auto_load_mesh_after_gen"] = True
 
-        st.session_state["geo_messages"].append(
-            {"role": "assistant", "content": f"✅ Mesh generated: {len(msh_bytes):,} bytes\n\n```text\n{gmsh_log}\n```"}
-        )
-        _geo_chat_save_current()
-        st.rerun()
+            st.session_state["geo_messages"].append(
+                {"role": "assistant", "content": f"✅ Mesh generated: {len(msh_bytes):,} bytes\n\n```text\n{gmsh_log}\n```"}
+            )
+            _geo_chat_save_current()
+            st.rerun()
 
 
 
@@ -7179,8 +7245,79 @@ def ensure_mesh_loaded():
                 file_bytes, tri_rule_name, int(seg_gauss_n), int(quad_gauss_n)
             )
         except Exception as e:
-            st.error(f"Mesh load/build error: {e}")
-            return False
+            err_msg = str(e)
+            st.error(f"Mesh load/build error: {err_msg}")
+            
+            # Auto-retry with LLM regeneration if:
+            # 1. Mesh was generated from .geo (not uploaded .msh)
+            # 2. Error is mesh-related (empty arrays, no domain elements, etc.)
+            # 3. We have .geo text (either from LLM or manually pasted)
+            is_mesh_error = any(keyword in err_msg.lower() for keyword in [
+                "need at least one array",
+                "no domain elements",
+                "empty",
+                "concatenate",
+                "no triangles",
+                "no quads",
+                "vstack",
+                "at least one array",
+                "zero-size array",
+                "reduction operation",
+                "which has no identity",
+                "cannot concatenate",
+                "empty array",
+                "no elements found",
+                "no cells found"
+            ])
+            is_generated_mesh = "generated_msh_bytes" in st.session_state or file_name == st.session_state.get("generated_msh_name")
+            # Check if we have .geo text (from LLM or manual paste)
+            has_geo_text = bool(st.session_state.get("geo_text", "").strip())
+            
+            # For any mesh error from generated mesh, always try to regenerate
+            if is_mesh_error and is_generated_mesh and has_geo_text:
+                st.warning("🔄 Mesh error detected. Automatically regenerating .geo with LLM...")
+                # Set flag to trigger automatic regeneration
+                st.session_state["auto_retry_mesh_error"] = True
+                st.session_state["mesh_error_msg"] = err_msg
+                # If no LLM history, use the current .geo as context
+                if not st.session_state.get("last_llm_nl", ""):
+                    # Extract a description from the .geo if possible, or use a generic message
+                    geo_text = st.session_state.get("geo_text", "")
+                    if geo_text:
+                        # Try to extract a simple description from comments or structure
+                        # Look for comments in the .geo file
+                        lines = geo_text.split('\n')
+                        comments = [line.strip() for line in lines if line.strip().startswith('//')]
+                        if comments:
+                            # Use the first meaningful comment as description
+                            desc = comments[0].replace('//', '').strip()[:100]
+                            st.session_state["last_llm_nl"] = f"{desc}. Previous error: {err_msg[:150]}"
+                        else:
+                            st.session_state["last_llm_nl"] = f"Generate a correct .geo file that produces a valid mesh. Previous error: {err_msg[:200]}"
+                # Trigger immediate rerun to start regeneration
+                # Use st.rerun() to immediately trigger the regeneration logic
+                st.rerun()
+                return False
+            elif is_generated_mesh and has_geo_text:
+                # Even if error keywords don't match, if it's a generated mesh with .geo text,
+                # try to regenerate (catch-all for mesh errors)
+                st.warning("🔄 Mesh error detected. Automatically regenerating .geo with LLM...")
+                st.session_state["auto_retry_mesh_error"] = True
+                st.session_state["mesh_error_msg"] = err_msg
+                if not st.session_state.get("last_llm_nl", ""):
+                    geo_text = st.session_state.get("geo_text", "")
+                    if geo_text:
+                        lines = geo_text.split('\n')
+                        comments = [line.strip() for line in lines if line.strip().startswith('//')]
+                        if comments:
+                            desc = comments[0].replace('//', '').strip()[:100]
+                            st.session_state["last_llm_nl"] = f"{desc}. Previous error: {err_msg[:150]}"
+                        else:
+                            st.session_state["last_llm_nl"] = f"Generate a correct .geo file that produces a valid mesh. Previous error: {err_msg[:200]}"
+                st.rerun()
+                return False
+            else:
+                return False
     st.session_state["omega_info"] = omega_info
     mesh_dim = int(omega_info.get("dim", 2))
     st.session_state["mesh_dim"] = mesh_dim
@@ -7360,6 +7497,10 @@ if show_mesh_preview:
     _ok_preview = False
     if _has_mesh_source:
         _ok_preview = bool(ensure_mesh_loaded())
+        # If auto-retry is triggered, rerun to start regeneration
+        if not _ok_preview and st.session_state.get("auto_retry_mesh_error", False):
+            st.info("🔄 Mesh error detected. LLM regeneration will be triggered automatically. Please wait...")
+            st.rerun()
     if (not _has_mesh_source) or (not _ok_preview):
         _ok_preview = False
 
@@ -7405,7 +7546,12 @@ if train_clicked:
     else:
         ok_mesh = ensure_mesh_loaded()
     if not ok_mesh:
-        st.stop()
+        # If auto-retry is triggered, don't stop - let the regeneration logic run
+        if st.session_state.get("auto_retry_mesh_error", False):
+            st.info("🔄 Mesh error detected. LLM regeneration will be triggered automatically. Please wait...")
+            st.rerun()  # Rerun to trigger the regeneration logic
+        else:
+            st.stop()
 
     set_seed(int(seed))
 
