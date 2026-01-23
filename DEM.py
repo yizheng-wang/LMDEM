@@ -641,6 +641,16 @@ with st.expander("🌍 Visitor Map (click to view)", expanded=False):
         
         st.markdown(f"**Unique visitors:** {unique_visitors} | **Locations:** {len(all_map_points)}")
         
+        # Red dot size control
+        dot_size = st.slider(
+            "🔴 Red dot size",
+            min_value=1000,
+            max_value=200000,
+            value=50000,
+            step=5000,
+            help="Adjust the size of red dots on the map (in meters)"
+        )
+        
         # Debug: show data
         if st.checkbox("Show map data", value=False, key="show_map_data_debug"):
             st.dataframe(df_map)
@@ -654,7 +664,7 @@ with st.expander("🌍 Visitor Map (click to view)", expanded=False):
                     data=df_map,
                     get_position=["lon", "lat"],
                     get_color=[255, 0, 0, 255],  # Bright red (RGBA)
-                    get_radius=50000,  # Large radius in meters for visibility on global map
+                    get_radius=dot_size,  # Adjustable radius in meters
                     pickable=False,  # Disable picking for better performance
                 )
                 
