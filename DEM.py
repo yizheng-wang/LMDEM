@@ -314,7 +314,8 @@ def get_visitor_map_data() -> tuple[list[dict], int]:
     """
     Get visitor locations formatted for Streamlit map visualization.
     Returns (map_dataframe_dict_list, unique_visitor_count).
-    Each dict has: lat, lon, size (for marker size), tooltip (city, country).
+    Each dict has: lat, lon.
+    Each visitor gets a red dot on the map (no grouping - show all visitors).
     """
     visitors = load_visitor_locations()
     
@@ -325,43 +326,15 @@ def get_visitor_map_data() -> tuple[list[dict], int]:
     unique_ips = set(v.get('ip', '') for v in visitors if v.get('ip'))
     unique_count = len(unique_ips)
     
-    # Group by location (lat, lon) to aggregate nearby visits
-    location_groups = {}
+    # Show each visitor as a separate point (no grouping - each visitor gets a red dot)
+    map_data = []
     for v in visitors:
         if 'lat' in v and 'lon' in v and v.get('lat') != 0 and v.get('lon') != 0:
-            # Round to ~1km precision for grouping
-            lat_key = round(v['lat'], 2)
-            lon_key = round(v['lon'], 2)
-            key = (lat_key, lon_key)
-            
-            if key not in location_groups:
-                location_groups[key] = {
-                    'lat': v['lat'],
-                    'lon': v['lon'],
-                    'count': 0,
-                    'cities': set(),
-                    'countries': set(),
-                }
-            
-            location_groups[key]['count'] += 1
-            if v.get('city'):
-                location_groups[key]['cities'].add(v['city'])
-            if v.get('country'):
-                location_groups[key]['countries'].add(v['country'])
-    
-    # Convert to map data format
-    map_data = []
-    for (lat, lon), group in location_groups.items():
-        cities_str = ', '.join(sorted(group['cities'])) if group['cities'] else 'Unknown'
-        countries_str = ', '.join(sorted(group['countries'])) if group['countries'] else 'Unknown'
-        tooltip = f"{cities_str}, {countries_str} ({group['count']} visits)"
-        
-        map_data.append({
-            'lat': group['lat'],
-            'lon': group['lon'],
-            'size': min(group['count'] * 2, 50),  # Marker size based on visit count
-            'tooltip': tooltip,
-        })
+            # Each visitor gets their own point
+            map_data.append({
+                'lat': v['lat'],
+                'lon': v['lon'],
+            })
     
     return map_data, unique_count
 
@@ -611,28 +584,21 @@ with st.expander("🌍 Visitor Map (click to view)", expanded=False):
     
     map_data, unique_visitors = get_visitor_map_data()
     
-    # Always include current visitor location in the map
+    # Collect all map points (all visitors, each gets a red dot)
     all_map_points = []
     if map_data:
         all_map_points.extend(map_data)
     
-    # Add current visitor location if available and not already in map_data
+    # Add current visitor location if available (will be saved on next page load)
     if location_info and 'lat' in location_info and 'lon' in location_info:
-        current_lat = location_info['lat']
-        current_lon = location_info['lon']
-        # Check if current location is already in map_data (within 0.01 degree ~1km)
-        is_duplicate = False
-        for point in map_data:
-            if abs(point['lat'] - current_lat) < 0.01 and abs(point['lon'] - current_lon) < 0.01:
-                is_duplicate = True
-                break
-        if not is_duplicate:
+        current_lat = location_info.get('lat')
+        current_lon = location_info.get('lon')
+        # Validate coordinates
+        if current_lat and current_lon and current_lat != 0 and current_lon != 0:
+            # Always add current location to show on map (even if not saved yet)
             all_map_points.append({
                 'lat': current_lat,
                 'lon': current_lon,
-                'count': 1,
-                'cities': {location_info.get('city', 'Unknown')},
-                'countries': {location_info.get('country', 'Unknown')},
             })
     
     # Debug and test section
@@ -675,35 +641,52 @@ with st.expander("🌍 Visitor Map (click to view)", expanded=False):
         
         st.markdown(f"**Unique visitors:** {unique_visitors} | **Locations:** {len(all_map_points)}")
         
+        # Debug: show data
+        if st.checkbox("Show map data", value=False, key="show_map_data_debug"):
+            st.dataframe(df_map)
+        
         if use_pydeck:
-            # Use pydeck for red dot markers
-            layer = pdk.Layer(
-                "ScatterplotLayer",
-                data=df_map,
-                get_position=["lon", "lat"],
-                get_color=[255, 0, 0, 200],  # Red color (RGBA)
-                get_radius=5000,  # Radius in meters
-                pickable=True,
-            )
-            
-            view_state = pdk.ViewState(
-                latitude=df_map['lat'].mean() if len(df_map) > 0 else 0,
-                longitude=df_map['lon'].mean() if len(df_map) > 0 else 0,
-                zoom=1 if len(all_map_points) > 1 else 5,
-                pitch=0,
-                bearing=0,
-            )
-            
-            r = pdk.Deck(
-                layers=[layer],
-                initial_view_state=view_state,
-                map_style='mapbox://styles/mapbox/light-v9',
-                tooltip={"text": "Visitor location"},
-            )
-            st.pydeck_chart(r)
+            try:
+                # Use pydeck for red dot markers - each visitor gets a red dot
+                # Simple configuration for global view
+                layer = pdk.Layer(
+                    "ScatterplotLayer",
+                    data=df_map,
+                    get_position=["lon", "lat"],
+                    get_color=[255, 0, 0, 255],  # Bright red (RGBA)
+                    get_radius=50000,  # Large radius in meters for visibility on global map
+                    pickable=False,  # Disable picking for better performance
+                )
+                
+                # Global view - always start with world map centered
+                center_lat = 20  # Fixed center for global view
+                center_lon = 0   # Fixed center for global view
+                
+                # Always use zoom level 1 for global/world view
+                zoom_level = 1
+                
+                view_state = pdk.ViewState(
+                    latitude=center_lat,
+                    longitude=center_lon,
+                    zoom=zoom_level,
+                    pitch=0,
+                    bearing=0,
+                )
+                
+                # Use simple map style (no Mapbox token required)
+                r = pdk.Deck(
+                    layers=[layer],
+                    initial_view_state=view_state,
+                    map_style='light',  # Simple light style
+                )
+                st.pydeck_chart(r)
+            except Exception as e:
+                st.warning(f"⚠️ pydeck map failed: {str(e)}. Falling back to st.map()")
+                # Fallback to st.map() (blue markers, but it works reliably) - always global view
+                st.map(df_map, zoom=1)
         else:
-            # Fallback to st.map() (blue markers)
-            st.map(df_map, zoom=1 if len(all_map_points) > 1 else 5)
+            # Use st.map() (blue markers, but it works reliably) - always global view
+            st.map(df_map, zoom=1)
         
         # Show location details
         st.markdown("**Recent visitor locations:**")
