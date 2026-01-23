@@ -85,15 +85,20 @@ except ImportError:
 
 def get_client_ip() -> str:
     """
-    Get client IP address from Streamlit context.
+    Get client IP address from Streamlit context or external API.
     Returns IP address string or 'unknown' if unavailable.
     """
+    detected_ip = None
+    
+    # Try Streamlit's built-in context (Streamlit 1.28+)
     try:
-        # Use Streamlit's built-in context (Streamlit 1.28+)
         if hasattr(st, 'context') and hasattr(st.context, 'ip_address'):
             ip = st.context.ip_address
             if ip:
-                return str(ip)
+                detected_ip = str(ip)
+                # If it's localhost, we'll try external API as fallback
+                if detected_ip and not detected_ip.startswith('127.') and detected_ip != 'localhost':
+                    return detected_ip
     except Exception:
         pass
     
@@ -108,7 +113,7 @@ def get_client_ip() -> str:
                     # x-forwarded-for can contain multiple IPs, take the first one
                     if ',' in ip:
                         ip = ip.split(',')[0].strip()
-                    if ip:
+                    if ip and not ip.startswith('127.') and ip != 'localhost':
                         return ip
     except Exception:
         pass
@@ -122,14 +127,40 @@ def get_client_ip() -> str:
                     ip = headers[header]
                     if ',' in ip:
                         ip = ip.split(',')[0].strip()
-                    if ip:
+                    if ip and not ip.startswith('127.') and ip != 'localhost':
                         return ip
             if hasattr(st.client.request, 'remote_addr'):
-                return st.client.request.remote_addr or 'unknown'
+                ip = st.client.request.remote_addr
+                if ip and not ip.startswith('127.') and ip != 'localhost':
+                    return ip
     except Exception:
         pass
     
-    return 'unknown'
+    # Final fallback: use external API to get real public IP (if localhost detected or no IP found)
+    if not detected_ip or detected_ip.startswith('127.') or detected_ip == 'localhost':
+        try:
+            if requests:
+                # Try multiple free IP detection APIs
+                api_urls = [
+                    'https://api.ipify.org?format=text',
+                    'https://ifconfig.me/ip',
+                    'https://icanhazip.com',
+                    'https://checkip.amazonaws.com',
+                ]
+                for url in api_urls:
+                    try:
+                        response = requests.get(url, timeout=3)
+                        if response.status_code == 200:
+                            ip = response.text.strip()
+                            # Validate IP format (basic check)
+                            if ip and '.' in ip and not ip.startswith('127.'):
+                                return ip
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+    
+    return detected_ip if detected_ip else 'unknown'
 
 
 def get_ip_location(ip: str) -> dict | None:
@@ -570,7 +601,39 @@ st.caption(f"📊 Total visits: {total_visits:,}")
 
 # Visitor location map
 with st.expander("🌍 Visitor Map (click to view)", expanded=False):
+    import pandas as pd
+    try:
+        import pydeck as pdk
+        use_pydeck = True
+    except ImportError:
+        use_pydeck = False
+        st.warning("⚠️ pydeck not installed. Install with `pip install pydeck` for red dot markers. Using default st.map() for now.")
+    
     map_data, unique_visitors = get_visitor_map_data()
+    
+    # Always include current visitor location in the map
+    all_map_points = []
+    if map_data:
+        all_map_points.extend(map_data)
+    
+    # Add current visitor location if available and not already in map_data
+    if location_info and 'lat' in location_info and 'lon' in location_info:
+        current_lat = location_info['lat']
+        current_lon = location_info['lon']
+        # Check if current location is already in map_data (within 0.01 degree ~1km)
+        is_duplicate = False
+        for point in map_data:
+            if abs(point['lat'] - current_lat) < 0.01 and abs(point['lon'] - current_lon) < 0.01:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            all_map_points.append({
+                'lat': current_lat,
+                'lon': current_lon,
+                'count': 1,
+                'cities': {location_info.get('city', 'Unknown')},
+                'countries': {location_info.get('country', 'Unknown')},
+            })
     
     # Debug and test section
     with st.expander("🔧 Debug & Test", expanded=False):
@@ -585,7 +648,6 @@ with st.expander("🌍 Visitor Map (click to view)", expanded=False):
                         st.success("✅ Location fetched successfully!")
                         st.json(test_location)
                         # Show on map
-                        import pandas as pd
                         df_test = pd.DataFrame([{
                             'lat': test_location['lat'],
                             'lon': test_location['lon']
@@ -601,18 +663,47 @@ with st.expander("🌍 Visitor Map (click to view)", expanded=False):
             st.code(f"Location info: {location_info}")
             visitors_raw = load_visitor_locations()
             st.code(f"Total visitor records: {len(visitors_raw)}")
+            st.code(f"Map data points: {len(all_map_points)}")
             if visitors_raw:
                 st.json(visitors_raw[:3])  # Show first 3 records
     
-    if map_data:
-        # Create DataFrame for st.map
-        import pandas as pd
+    if all_map_points:
+        # Create DataFrame for map
         df_map = pd.DataFrame([
-            {'lat': d['lat'], 'lon': d['lon']} for d in map_data
+            {'lat': d['lat'], 'lon': d['lon']} for d in all_map_points
         ])
         
-        st.markdown(f"**Unique visitors:** {unique_visitors} | **Locations:** {len(map_data)}")
-        st.map(df_map, zoom=1)
+        st.markdown(f"**Unique visitors:** {unique_visitors} | **Locations:** {len(all_map_points)}")
+        
+        if use_pydeck:
+            # Use pydeck for red dot markers
+            layer = pdk.Layer(
+                "ScatterplotLayer",
+                data=df_map,
+                get_position=["lon", "lat"],
+                get_color=[255, 0, 0, 200],  # Red color (RGBA)
+                get_radius=5000,  # Radius in meters
+                pickable=True,
+            )
+            
+            view_state = pdk.ViewState(
+                latitude=df_map['lat'].mean() if len(df_map) > 0 else 0,
+                longitude=df_map['lon'].mean() if len(df_map) > 0 else 0,
+                zoom=1 if len(all_map_points) > 1 else 5,
+                pitch=0,
+                bearing=0,
+            )
+            
+            r = pdk.Deck(
+                layers=[layer],
+                initial_view_state=view_state,
+                map_style='mapbox://styles/mapbox/light-v9',
+                tooltip={"text": "Visitor location"},
+            )
+            st.pydeck_chart(r)
+        else:
+            # Fallback to st.map() (blue markers)
+            st.map(df_map, zoom=1 if len(all_map_points) > 1 else 5)
         
         # Show location details
         st.markdown("**Recent visitor locations:**")
@@ -626,29 +717,16 @@ with st.expander("🌍 Visitor Map (click to view)", expanded=False):
                 timestamp = v.get('timestamp', '')[:19] if v.get('timestamp') else 'Unknown time'
                 st.caption(f"📍 {city}, {country} — {timestamp}")
     else:
-        # Show current visitor location if available (even if not saved yet)
-        if location_info and 'lat' in location_info and 'lon' in location_info:
-            st.markdown("**Your current location:**")
-            import pandas as pd
-            df_current = pd.DataFrame([{
-                'lat': location_info['lat'],
-                'lon': location_info['lon']
-            }])
-            st.map(df_current, zoom=5)
-            city = location_info.get('city', 'Unknown')
-            country = location_info.get('country', 'Unknown')
-            st.caption(f"📍 {city}, {country}")
-            st.info("This is your current location. It will be saved to the visitor map after you refresh the page.")
+        # No data available
+        current_ip = get_client_ip()
+        if current_ip == 'unknown':
+            st.warning("⚠️ Could not detect your IP address. This may be because you're accessing the app locally (127.0.0.1) or through a proxy.")
+        elif current_ip.startswith('127.') or current_ip.startswith('localhost'):
+            st.info("ℹ️ You're accessing the app locally. IP geolocation only works for public IP addresses. Deploy the app to see visitor locations.")
+        elif location_info and 'error' in location_info:
+            st.warning(f"⚠️ Could not get location for IP {current_ip}. The geolocation API may be temporarily unavailable.")
         else:
-            current_ip = get_client_ip()
-            if current_ip == 'unknown':
-                st.warning("⚠️ Could not detect your IP address. This may be because you're accessing the app locally (127.0.0.1) or through a proxy.")
-            elif current_ip.startswith('127.') or current_ip.startswith('localhost'):
-                st.info("ℹ️ You're accessing the app locally. IP geolocation only works for public IP addresses. Deploy the app to see visitor locations.")
-            elif 'error' in location_info:
-                st.warning(f"⚠️ Could not get location for IP {current_ip}. The geolocation API may be temporarily unavailable.")
-            else:
-                st.info("No visitor location data available yet. Locations will appear as visitors access the app.")
+            st.info("No visitor location data available yet. Locations will appear as visitors access the app.")
 
 # -----------------------------
 # UI polish (chat look & feel)
@@ -6871,24 +6949,29 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
                 
                 for round_num in range(1, _max_regeneration_rounds + 1):
                     if round_num > 1:
-                        # Regenerate fresh .geo
+                        # Regenerate: completely fresh start, only use original prompt (no error info)
                         st.session_state["geo_messages"].append(
-                            {"role": "assistant", "content": f"🔄 Round {round_num}/{_max_regeneration_rounds}: Regenerating a fresh .geo..."}
+                            {"role": "assistant", "content": f"🔄 Round {round_num}/{_max_regeneration_rounds}: Regenerating from scratch (using original prompt only)..."}
                         )
                         try:
                             with st.spinner(f"Regenerating .geo (round {round_num}/{_max_regeneration_rounds})..."):
-                                regen_prompt = (
-                                    f"Please regenerate a correct {int(geo_dim)}D Gmsh .geo.\n"
-                                    f"Error log: {_truncate(str(manual_log), 4000)}\n"
-                                    "Ensure it generates a valid mesh with proper Physical groups."
-                                )
-                                regen_prompt = regen_prompt + _bc_directive_text()
+                                # Use only the original prompt, no error information (complete restart)
+                                original_nl = st.session_state.get("last_llm_nl", "")
+                                if original_nl and original_nl.strip():
+                                    regen_prompt = original_nl + _bc_directive_text()
+                                else:
+                                    # Fallback if no original prompt available
+                                    regen_prompt = (
+                                        f"Generate a correct {int(geo_dim)}D Gmsh .geo file.\n"
+                                        "Ensure it generates a valid mesh with proper Physical groups (Omega, Gamma_u, Gamma_t)."
+                                    )
+                                    regen_prompt = regen_prompt + _bc_directive_text()
                                 chat_regen, geo_in = llm_generate_geo_from_nl(
                                     regen_prompt,
                                     default_lc=float(st.session_state.get("lc_ui", 0.15)),
                                     geo_dim=int(geo_dim),
-                                    base_geo="",
-                                    base_nl=st.session_state.get("last_llm_nl", ""),
+                                    base_geo="",  # Start fresh - no previous .geo
+                                    base_nl="",   # Start fresh - no previous NL context
                                 )
                                 if chat_regen and chat_regen.strip():
                                     st.session_state["geo_messages"].append({"role": "assistant", "content": chat_regen})
@@ -7068,25 +7151,28 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
             # For auto-retry, always start with regeneration (round 1)
             for round_num in range(1, _max_regeneration_rounds + 1):
                 if round_num > 1 or _auto_retry:
-                    # Regenerate a fresh .geo from scratch (new conversation context)
+                    # Regenerate: completely fresh start, only use original prompt (no error info)
                     st.session_state["geo_messages"].append(
-                        {"role": "assistant", "content": f"🔄 Round {round_num}/{_max_regeneration_rounds}: Regenerating a fresh .geo from scratch..."}
+                        {"role": "assistant", "content": f"🔄 Round {round_num}/{_max_regeneration_rounds}: Regenerating from scratch (using original prompt only)..."}
                     )
                     try:
                         with st.spinner(f"Regenerating .geo (round {round_num}/{_max_regeneration_rounds})..."):
-                            regen_prompt = (
-                                f"Please regenerate a correct {int(geo_dim)}D Gmsh .geo.\n"
-                                f"Previous error: {_truncate(err_text, 4000)}\n"
-                                f"Original request: {_truncate(initial_nl, 2000) if initial_nl else 'N/A'}\n"
-                                "Ensure it generates a valid mesh with proper Physical groups."
-                            )
-                            regen_prompt = regen_prompt + _bc_directive_text()
+                            # Use only the original prompt, no error information (complete restart)
+                            if initial_nl and initial_nl.strip():
+                                regen_prompt = initial_nl + _bc_directive_text()
+                            else:
+                                # Fallback if no original prompt available
+                                regen_prompt = (
+                                    f"Generate a correct {int(geo_dim)}D Gmsh .geo file.\n"
+                                    "Ensure it generates a valid mesh with proper Physical groups (Omega, Gamma_u, Gamma_t)."
+                                )
+                                regen_prompt = regen_prompt + _bc_directive_text()
                             chat_regen, geo_text = llm_generate_geo_from_nl(
                                 regen_prompt,
                                 default_lc=float(st.session_state.get("lc_ui", 0.15)),
                                 geo_dim=int(geo_dim),
-                                base_geo="",  # Start fresh
-                                base_nl=initial_nl,
+                                base_geo="",  # Start fresh - no previous .geo
+                                base_nl="",   # Start fresh - no previous NL context
                             )
                             if chat_regen and chat_regen.strip():
                                 st.session_state["geo_messages"].append({"role": "assistant", "content": chat_regen})

@@ -11,3 +11,4 @@ pandas>=1.5.0  # For visitor map visualization (usually included with Streamlit)
 anthropic>=0.18.0  # For Claude API
 google-generativeai>=0.3.0  # For Google Gemini API
 requests>=2.31.0  # For Ollama API and IP geolocation API (may already be installed via other packages)
+pydeck
