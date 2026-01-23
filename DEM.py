@@ -83,17 +83,108 @@ try:
 except ImportError:
     requests = None
 
-def get_and_increment_visit_count() -> int:
+def get_client_ip() -> str:
     """
-    Get and increment the total visit count.
-    Stores the count in a JSON file 'visit_count.json' in the same directory as this script.
-    Returns the updated count.
+    Get client IP address from Streamlit context.
+    Returns IP address string or 'unknown' if unavailable.
+    """
+    try:
+        # Use Streamlit's built-in context (Streamlit 1.28+)
+        if hasattr(st, 'context') and hasattr(st.context, 'ip_address'):
+            ip = st.context.ip_address
+            if ip:
+                return str(ip)
+    except Exception:
+        pass
+    
+    # Fallback: try headers from context
+    try:
+        if hasattr(st, 'context') and hasattr(st.context, 'headers'):
+            headers = st.context.headers
+            # Check common IP headers (in order of preference)
+            for header in ['x-forwarded-for', 'x-real-ip', 'x-client-ip', 'cf-connecting-ip']:
+                if header in headers:
+                    ip = headers[header]
+                    # x-forwarded-for can contain multiple IPs, take the first one
+                    if ',' in ip:
+                        ip = ip.split(',')[0].strip()
+                    if ip:
+                        return ip
+    except Exception:
+        pass
+    
+    # Fallback: try st.client (older Streamlit versions)
+    try:
+        if hasattr(st, 'client') and hasattr(st.client, 'request'):
+            headers = st.client.request.headers
+            for header in ['x-forwarded-for', 'x-real-ip', 'x-client-ip', 'cf-connecting-ip']:
+                if header in headers:
+                    ip = headers[header]
+                    if ',' in ip:
+                        ip = ip.split(',')[0].strip()
+                    if ip:
+                        return ip
+            if hasattr(st.client.request, 'remote_addr'):
+                return st.client.request.remote_addr or 'unknown'
+    except Exception:
+        pass
+    
+    return 'unknown'
+
+
+def get_ip_location(ip: str) -> dict:
+    """
+    Get geographic location from IP address using free API.
+    Returns dict with: lat, lon, city, country, country_code, region, timezone
+    Falls back to None if API fails or IP is invalid.
+    """
+    if not ip or ip == 'unknown' or ip.startswith('127.') or ip.startswith('localhost'):
+        return None
+    
+    try:
+        # Use ip-api.com (free, no key required, 45 requests/minute)
+        # Format: http://ip-api.com/json/{ip}?fields=status,message,country,countryCode,region,regionName,city,lat,lon,timezone
+        if requests is None:
+            return None
+        
+        url = f"http://ip-api.com/json/{ip}?fields=status,message,country,countryCode,region,regionName,city,lat,lon,timezone"
+        resp = requests.get(url, timeout=3)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        if data.get('status') == 'success':
+            return {
+                'lat': float(data.get('lat', 0)),
+                'lon': float(data.get('lon', 0)),
+                'city': str(data.get('city', '')),
+                'country': str(data.get('country', '')),
+                'country_code': str(data.get('countryCode', '')),
+                'region': str(data.get('regionName', '')),
+                'timezone': str(data.get('timezone', '')),
+            }
+    except Exception:
+        # API failed, return None
+        pass
+    
+    return None
+
+
+def get_and_increment_visit_count() -> tuple[int, dict]:
+    """
+    Get and increment the total visit count, and record visitor location.
+    Stores the count in 'visit_count.json' and visitor records in 'visitor_locations.json'.
+    Returns (count, location_info_dict).
     """
     from pathlib import Path
+    from datetime import datetime
     
-    # Get the directory where this script is located
     script_dir = Path(__file__).parent
     count_file = script_dir / "visit_count.json"
+    locations_file = script_dir / "visitor_locations.json"
+    
+    # Get client IP and location
+    ip = get_client_ip()
+    location = get_ip_location(ip) if ip != 'unknown' else None
     
     # Read existing count or initialize to 0
     try:
@@ -114,10 +205,122 @@ def get_and_increment_visit_count() -> int:
         with open(count_file, 'w', encoding='utf-8') as f:
             json.dump({'total_visits': count}, f, indent=2)
     except Exception:
-        # If we can't write, just return the count we have
         pass
     
-    return count
+    # Record visitor location
+    if location:
+        try:
+            # Read existing locations
+            if locations_file.exists():
+                with open(locations_file, 'r', encoding='utf-8') as f:
+                    locations_data = json.load(f)
+                    visitors = locations_data.get('visitors', [])
+            else:
+                visitors = []
+            
+            # Add new visitor record
+            visitor_record = {
+                'ip': ip,
+                'timestamp': datetime.now().isoformat(),
+                'lat': location['lat'],
+                'lon': location['lon'],
+                'city': location['city'],
+                'country': location['country'],
+                'country_code': location['country_code'],
+                'region': location['region'],
+                'timezone': location['timezone'],
+            }
+            visitors.append(visitor_record)
+            
+            # Keep only last 1000 records to avoid file bloat
+            if len(visitors) > 1000:
+                visitors = visitors[-1000:]
+            
+            # Save updated locations
+            with open(locations_file, 'w', encoding='utf-8') as f:
+                json.dump({'visitors': visitors}, f, indent=2)
+        except Exception:
+            pass
+    
+    location_info = location if location else {'ip': ip, 'error': 'Location unavailable'}
+    return count, location_info
+
+
+def load_visitor_locations() -> list[dict]:
+    """
+    Load all visitor location records from JSON file.
+    Returns list of visitor records with lat, lon, city, country, etc.
+    """
+    from pathlib import Path
+    
+    script_dir = Path(__file__).parent
+    locations_file = script_dir / "visitor_locations.json"
+    
+    try:
+        if locations_file.exists():
+            with open(locations_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get('visitors', [])
+    except Exception:
+        pass
+    
+    return []
+
+
+def get_visitor_map_data() -> tuple[list[dict], int]:
+    """
+    Get visitor locations formatted for Streamlit map visualization.
+    Returns (map_dataframe_dict_list, unique_visitor_count).
+    Each dict has: lat, lon, size (for marker size), tooltip (city, country).
+    """
+    visitors = load_visitor_locations()
+    
+    if not visitors:
+        return [], 0
+    
+    # Count unique IPs
+    unique_ips = set(v.get('ip', '') for v in visitors if v.get('ip'))
+    unique_count = len(unique_ips)
+    
+    # Group by location (lat, lon) to aggregate nearby visits
+    location_groups = {}
+    for v in visitors:
+        if 'lat' in v and 'lon' in v and v.get('lat') != 0 and v.get('lon') != 0:
+            # Round to ~1km precision for grouping
+            lat_key = round(v['lat'], 2)
+            lon_key = round(v['lon'], 2)
+            key = (lat_key, lon_key)
+            
+            if key not in location_groups:
+                location_groups[key] = {
+                    'lat': v['lat'],
+                    'lon': v['lon'],
+                    'count': 0,
+                    'cities': set(),
+                    'countries': set(),
+                }
+            
+            location_groups[key]['count'] += 1
+            if v.get('city'):
+                location_groups[key]['cities'].add(v['city'])
+            if v.get('country'):
+                location_groups[key]['countries'].add(v['country'])
+    
+    # Convert to map data format
+    map_data = []
+    for (lat, lon), group in location_groups.items():
+        cities_str = ', '.join(sorted(group['cities'])) if group['cities'] else 'Unknown'
+        countries_str = ', '.join(sorted(group['countries'])) if group['countries'] else 'Unknown'
+        tooltip = f"{cities_str}, {countries_str} ({group['count']} visits)"
+        
+        map_data.append({
+            'lat': group['lat'],
+            'lon': group['lon'],
+            'size': min(group['count'] * 2, 50),  # Marker size based on visit count
+            'tooltip': tooltip,
+        })
+    
+    return map_data, unique_count
 
 
 # LLM Provider types
@@ -341,15 +544,58 @@ st.set_page_config(page_title="Deep Energy Method", page_icon="⚡", layout="wid
 
 # Track visit count (only increment once per session)
 if 'visit_count_initialized' not in st.session_state:
-    total_visits = get_and_increment_visit_count()
+    total_visits, location_info = get_and_increment_visit_count()
     st.session_state['visit_count_initialized'] = True
     st.session_state['total_visits'] = total_visits
+    st.session_state['visitor_location'] = location_info
 else:
     total_visits = st.session_state.get('total_visits', 0)
+    location_info = st.session_state.get('visitor_location', {})
 
 st.title("🤩 Deep Energy Method based on LLM")
 st.caption("The author is Yizheng Wang, email: wang-yz19@tsinghua.org.cn")
 st.caption(f"📊 Total visits: {total_visits:,}")
+
+# Visitor location map
+with st.expander("🌍 Visitor Map (click to view)", expanded=False):
+    map_data, unique_visitors = get_visitor_map_data()
+    
+    if map_data:
+        # Create DataFrame for st.map
+        import pandas as pd
+        df_map = pd.DataFrame([
+            {'lat': d['lat'], 'lon': d['lon']} for d in map_data
+        ])
+        
+        st.markdown(f"**Unique visitors:** {unique_visitors} | **Locations:** {len(map_data)}")
+        st.map(df_map, zoom=1)
+        
+        # Show location details
+        st.markdown("**Recent visitor locations:**")
+        visitors = load_visitor_locations()
+        recent_visitors = sorted(visitors, key=lambda x: x.get('timestamp', ''), reverse=True)[:10]
+        
+        for v in recent_visitors:
+            if 'city' in v and 'country' in v:
+                city = v.get('city', 'Unknown')
+                country = v.get('country', 'Unknown')
+                timestamp = v.get('timestamp', '')[:19] if v.get('timestamp') else 'Unknown time'
+                st.caption(f"📍 {city}, {country} — {timestamp}")
+    else:
+        st.info("No visitor location data available yet. Locations will appear as visitors access the app.")
+        
+        # Show current visitor location if available
+        if location_info and 'lat' in location_info and 'lon' in location_info:
+            st.markdown("**Your current location:**")
+            import pandas as pd
+            df_current = pd.DataFrame([{
+                'lat': location_info['lat'],
+                'lon': location_info['lon']
+            }])
+            st.map(df_current, zoom=5)
+            city = location_info.get('city', 'Unknown')
+            country = location_info.get('country', 'Unknown')
+            st.caption(f"📍 {city}, {country}")
 
 # -----------------------------
 # UI polish (chat look & feel)

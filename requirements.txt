@@ -6,7 +6,8 @@ torch>=2.0.0
 meshio
 openai>=1.0.0
 pydantic>=2.0.0
+pandas>=1.5.0  # For visitor map visualization (usually included with Streamlit)
 # Optional LLM providers (install only if needed)
 anthropic>=0.18.0  # For Claude API
 google-generativeai>=0.3.0  # For Google Gemini API
-requests>=2.31.0  # For Ollama API (may already be installed via other packages)
+requests>=2.31.0  # For Ollama API and IP geolocation API (may already be installed via other packages)
