@@ -1498,7 +1498,7 @@ def _get_default_model(provider: LLMProvider) -> str:
         "anthropic": "claude-3-5-sonnet-20241022",
         "google": "gemini-1.5-pro",
         "ollama": "llama3.1",
-        "deepseek": "deepseek-chat",
+        "deepseek": "deepseek-coder",
     }
     return defaults.get(provider, "o3-mini")
 
