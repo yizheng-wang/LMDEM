@@ -340,7 +340,7 @@ def get_visitor_map_data() -> tuple[list[dict], int]:
 
 
 # LLM Provider types
-LLMProvider = Literal["openai", "anthropic", "google", "ollama"]
+LLMProvider = Literal["openai", "anthropic", "google", "ollama", "deepseek"]
 
 def _get_llm_api_key(provider: LLMProvider) -> str:
     """
@@ -354,6 +354,7 @@ def _get_llm_api_key(provider: LLMProvider) -> str:
         "anthropic": "ANTHROPIC_API_KEY",
         "google": "GOOGLE_API_KEY",
         "ollama": "OLLAMA_BASE_URL",  # Ollama uses URL, not key
+        "deepseek": "DEEPSEEK_API_KEY",
     }
     
     secret_key_map = {
@@ -361,6 +362,7 @@ def _get_llm_api_key(provider: LLMProvider) -> str:
         "anthropic": "ANTHROPIC_API_KEY",
         "google": "GOOGLE_API_KEY",
         "ollama": "OLLAMA_BASE_URL",
+        "deepseek": "DEEPSEEK_API_KEY",
     }
     
     ui_key_map = {
@@ -368,6 +370,7 @@ def _get_llm_api_key(provider: LLMProvider) -> str:
         "anthropic": "anthropic_api_key_ui",
         "google": "google_api_key_ui",
         "ollama": "ollama_base_url_ui",
+        "deepseek": "deepseek_api_key_ui",
     }
     
     # 1) session-only UI override
@@ -477,6 +480,21 @@ def _call_llm(
         resp = requests.post(url, json=payload, timeout=120)
         resp.raise_for_status()
         return resp.json()["message"]["content"]
+    
+    elif provider == "deepseek":
+        key = _get_llm_api_key("deepseek")
+        if not key:
+            raise RuntimeError("DEEPSEEK_API_KEY is not set.")
+        # DeepSeek uses OpenAI-compatible API
+        client = OpenAI(api_key=key, base_url="https://api.deepseek.com")
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        return resp.choices[0].message.content
     
     else:
         raise ValueError(f"Unsupported provider: {provider}")
@@ -1480,6 +1498,7 @@ def _get_default_model(provider: LLMProvider) -> str:
         "anthropic": "claude-3-5-sonnet-20241022",
         "google": "gemini-1.5-pro",
         "ollama": "llama3.1",
+        "deepseek": "deepseek-chat",
     }
     return defaults.get(provider, "o3-mini")
 
@@ -1519,6 +1538,11 @@ def _get_available_models(provider: LLMProvider) -> list[str]:
             "mixtral",
             "codellama",
             "qwen2.5",
+        ],
+        "deepseek": [
+            "deepseek-chat",
+            "deepseek-coder",
+            "deepseek-reasoner",
         ],
     }
     return models.get(provider, ["gpt-4o"])
@@ -5883,7 +5907,7 @@ with st.sidebar:
         # Provider selection
         provider = st.selectbox(
             "LLM Provider",
-            options=["openai", "anthropic", "google", "ollama"],
+            options=["openai", "anthropic", "google", "ollama", "deepseek"],
             index=0,
             key="llm_provider",
             help="Select the LLM provider to use for geometry generation.",
@@ -5947,6 +5971,17 @@ with st.sidebar:
                 ),
             )
             st.info("💡 Make sure Ollama is installed and running locally. Install from: https://ollama.ai")
+        elif provider == "deepseek":
+            st.text_input(
+                "DEEPSEEK_API_KEY (session-only)",
+                type="password",
+                key="deepseek_api_key_ui",
+                help=(
+                    "If set here, it is used only for your current browser session and is not saved to disk. "
+                    "On Streamlit Community Cloud, the app owner can also set it in Settings → Secrets. "
+                    "Get your API key from: https://platform.deepseek.com/api_keys"
+                ),
+            )
 
     # ------------------------------------------------------------
     # Geometry (Gmsh CLI)
@@ -5959,6 +5994,7 @@ with st.sidebar:
             "anthropic": "ANTHROPIC_API_KEY",
             "google": "GOOGLE_API_KEY",
             "ollama": "OLLAMA_BASE_URL",
+            "deepseek": "DEEPSEEK_API_KEY",
         }
         env_var = env_var_map.get(current_provider, "OPENAI_API_KEY")
         st.warning(
@@ -6785,6 +6821,7 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
             "anthropic": "ANTHROPIC_API_KEY",
             "google": "GOOGLE_API_KEY",
             "ollama": "OLLAMA_BASE_URL",
+            "deepseek": "DEEPSEEK_API_KEY",
         }
         env_var = env_var_map.get(current_provider, "OPENAI_API_KEY")
         st.session_state["geo_messages"].append(
