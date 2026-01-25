@@ -1313,7 +1313,7 @@ def llm_generate_geo_from_nl(
     """
     # Get provider and model from session state if not provided
     if provider is None:
-        provider = st.session_state.get("llm_provider", "openai")
+        provider = st.session_state.get("llm_provider", "deepseek")
     if model is None:
         model = st.session_state.get("llm_model", _get_default_model(provider))
 
@@ -1423,7 +1423,7 @@ def llm_fix_geo_with_gmsh_log(
     """
     # Get provider and model from session state if not provided
     if provider is None:
-        provider = st.session_state.get("llm_provider", "openai")
+        provider = st.session_state.get("llm_provider", "deepseek")
     if model is None:
         model = st.session_state.get("llm_model", _get_default_model(provider))
 
@@ -5907,7 +5907,7 @@ with st.sidebar:
         # Provider selection
         provider = st.selectbox(
             "LLM Provider",
-            options=["openai", "anthropic", "google", "ollama", "deepseek"],
+            options=["deepseek", "openai", "anthropic", "google", "ollama"],
             index=0,
             key="llm_provider",
             help="Select the LLM provider to use for geometry generation.",
@@ -5986,9 +5986,9 @@ with st.sidebar:
     # ------------------------------------------------------------
     # Geometry (Gmsh CLI)
     # ------------------------------------------------------------
-    _llm_ready = bool(_get_llm_api_key(st.session_state.get("llm_provider", "openai")))
+    _llm_ready = bool(_get_llm_api_key(st.session_state.get("llm_provider", "deepseek")))
     if not _llm_ready:
-        current_provider = st.session_state.get("llm_provider", "openai")
+        current_provider = st.session_state.get("llm_provider", "deepseek")
         env_var_map = {
             "openai": "OPENAI_API_KEY",
             "anthropic": "ANTHROPIC_API_KEY",
@@ -5996,7 +5996,7 @@ with st.sidebar:
             "ollama": "OLLAMA_BASE_URL",
             "deepseek": "DEEPSEEK_API_KEY",
         }
-        env_var = env_var_map.get(current_provider, "OPENAI_API_KEY")
+        env_var = env_var_map.get(current_provider, "DEEPSEEK_API_KEY")
         st.warning(
             f"{env_var} not set. LLM geometry generation/repair is disabled. "
             f"Set it via Streamlit Secrets ({env_var}) or environment variable."
@@ -6745,14 +6745,15 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
         # Minimal header; keep it compact like ChatGPT
         st.caption("Enter your request and press Enter: auto-generate/edit `.geo`, then auto-generate/load `.msh` (auto-repair on failure: 5 rounds × 2 repairs = 10 attempts).")
         if not _llm_ready:
-            current_provider = st.session_state.get("llm_provider", "openai")
+            current_provider = st.session_state.get("llm_provider", "deepseek")
             env_var_map = {
                 "openai": "OPENAI_API_KEY",
                 "anthropic": "ANTHROPIC_API_KEY",
                 "google": "GOOGLE_API_KEY",
                 "ollama": "OLLAMA_BASE_URL",
+                "deepseek": "DEEPSEEK_API_KEY",
             }
-            env_var = env_var_map.get(current_provider, "OPENAI_API_KEY")
+            env_var = env_var_map.get(current_provider, "DEEPSEEK_API_KEY")
             st.info(
                 f"LLM is disabled because `{env_var}` is not configured. "
                 f"For Streamlit Cloud: put `{env_var}=\"...\"` in Secrets. "
@@ -6815,7 +6816,7 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
 
     if prompt_to_send and (not _llm_ready):
         # Should be unreachable if chat_input is disabled, but keep it safe.
-        current_provider = st.session_state.get("llm_provider", "openai")
+        current_provider = st.session_state.get("llm_provider", "deepseek")
         env_var_map = {
             "openai": "OPENAI_API_KEY",
             "anthropic": "ANTHROPIC_API_KEY",
@@ -6823,7 +6824,7 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
             "ollama": "OLLAMA_BASE_URL",
             "deepseek": "DEEPSEEK_API_KEY",
         }
-        env_var = env_var_map.get(current_provider, "OPENAI_API_KEY")
+        env_var = env_var_map.get(current_provider, "DEEPSEEK_API_KEY")
         st.session_state["geo_messages"].append(
             {"role": "assistant", "content": f"❌ {env_var} is not configured, so LLM calls are disabled."}
         )
