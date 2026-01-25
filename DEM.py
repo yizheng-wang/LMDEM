@@ -1555,6 +1555,8 @@ def read_gmsh_msh_bytes(msh_bytes: bytes):
     # Write bytes to a temp file, then let meshio read from path (most compatible).
     with tempfile.NamedTemporaryFile(delete=False, suffix=".msh") as f:
         f.write(msh_bytes)
+        f.flush()
+        os.fsync(f.fileno())  # Ensure data is written to disk (important for VPS/tmpfs)
         tmp_path = f.name
 
     try:
@@ -7134,7 +7136,19 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
         # sync lc from UI into geo_text before validate+run gmsh
         geo_text = upsert_lc_in_geo(geo_text, float(st.session_state.get("lc_ui", 0.15)))
         st.session_state["geo_text"] = geo_text
-        
+
+        # Define _run_once helper outside the conditional blocks so it's always available
+        def _run_once(geo_in: str):
+            msh_bytes, gmsh_log = gmsh_geo_to_msh_bytes(
+                geo_in,
+                gmsh_cmdline=gmsh_cmdline,
+                dim=int(geo_dim),
+                msh_format=str(geo_msh_format),
+                extra_args=str(geo_extra_args),
+                timeout_sec=180,
+            )
+            return msh_bytes, gmsh_log
+
         # For auto-retry, skip validation and Gmsh run, go directly to regeneration
         if _auto_retry:
             # Set up error message for regeneration
@@ -7152,17 +7166,6 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
                 st.error(f".geo validation failed: {msg}")
                 st.session_state["geo_messages"].append({"role": "assistant", "content": f"❌ .geo validation failed: {msg}"})
                 st.stop()
-
-            def _run_once(geo_in: str):
-                msh_bytes, gmsh_log = gmsh_geo_to_msh_bytes(
-                    geo_in,
-                    gmsh_cmdline=gmsh_cmdline,
-                    dim=int(geo_dim),
-                    msh_format=str(geo_msh_format),
-                    extra_args=str(geo_extra_args),
-                    timeout_sec=180,
-                )
-                return msh_bytes, gmsh_log
 
             try:
                 with st.spinner("Running Gmsh to generate .msh..."):
