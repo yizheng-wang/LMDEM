@@ -1,4 +1,4 @@
-# DEM (Streamlit) — Deep Energy Method based on LLM
+# DEM (Streamlit) — Deep Energy Method based on LLM, the author is yizheng wang from Tsinghua university
 
 This is a Streamlit app for DEM (Deep Energy Method): load/generate a Gmsh mesh (`.msh`), train on mesh quadrature points, and export results to ParaView (`.vtu`).
 
