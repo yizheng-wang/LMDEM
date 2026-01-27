@@ -8144,11 +8144,11 @@ if res is not None:
 
         if can_plot and mesh_dim == 2:
             if out_dim == 1:
-                figU = plot_field_on_mesh(pts, tris, U, title=f"{res_problem} — DEM solution on mesh nodes", is_scalar=True)
+                figU = plot_field_on_mesh(pts, tris, U, title=f"{res_problem} — DEM solution", is_scalar=True)
                 st.pyplot(figU)
                 plt.close(figU)
             else:
-                figUV = plot_field_on_mesh(pts, tris, U, title=f"{res_problem} — DEM solution on mesh nodes", is_scalar=False)
+                figUV = plot_field_on_mesh(pts, tris, U, title=f"{res_problem} — DEM solution", is_scalar=False)
                 st.pyplot(figUV)
                 plt.close(figUV)
 

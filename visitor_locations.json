@@ -241,6 +241,94 @@
       "country_code": "DE",
       "region": "Thuringia",
       "timezone": "Europe/Berlin"
+    },
+    {
+      "ip": "141.54.46.40",
+      "timestamp": "2026-01-26T22:14:08.628391",
+      "lat": 50.9839,
+      "lon": 11.3231,
+      "city": "Weimar",
+      "country": "Germany",
+      "country_code": "DE",
+      "region": "Thuringia",
+      "timezone": "Europe/Berlin"
+    },
+    {
+      "ip": "141.54.46.40",
+      "timestamp": "2026-01-27T15:29:13.555273",
+      "lat": 50.9839,
+      "lon": 11.3231,
+      "city": "Weimar",
+      "country": "Germany",
+      "country_code": "DE",
+      "region": "Thuringia",
+      "timezone": "Europe/Berlin"
+    },
+    {
+      "ip": "141.54.46.40",
+      "timestamp": "2026-01-27T16:06:31.068826",
+      "lat": 50.9839,
+      "lon": 11.3231,
+      "city": "Weimar",
+      "country": "Germany",
+      "country_code": "DE",
+      "region": "Thuringia",
+      "timezone": "Europe/Berlin"
+    },
+    {
+      "ip": "141.54.46.40",
+      "timestamp": "2026-01-27T16:32:19.181608",
+      "lat": 50.9839,
+      "lon": 11.3231,
+      "city": "Weimar",
+      "country": "Germany",
+      "country_code": "DE",
+      "region": "Thuringia",
+      "timezone": "Europe/Berlin"
+    },
+    {
+      "ip": "141.54.46.40",
+      "timestamp": "2026-01-27T16:38:32.804785",
+      "lat": 50.9839,
+      "lon": 11.3231,
+      "city": "Weimar",
+      "country": "Germany",
+      "country_code": "DE",
+      "region": "Thuringia",
+      "timezone": "Europe/Berlin"
+    },
+    {
+      "ip": "141.54.46.40",
+      "timestamp": "2026-01-27T16:42:50.623289",
+      "lat": 50.9839,
+      "lon": 11.3231,
+      "city": "Weimar",
+      "country": "Germany",
+      "country_code": "DE",
+      "region": "Thuringia",
+      "timezone": "Europe/Berlin"
+    },
+    {
+      "ip": "141.54.46.40",
+      "timestamp": "2026-01-27T19:42:56.251441",
+      "lat": 50.9839,
+      "lon": 11.3231,
+      "city": "Weimar",
+      "country": "Germany",
+      "country_code": "DE",
+      "region": "Thuringia",
+      "timezone": "Europe/Berlin"
+    },
+    {
+      "ip": "141.54.46.40",
+      "timestamp": "2026-01-27T19:49:39.360699",
+      "lat": 50.9839,
+      "lon": 11.3231,
+      "city": "Weimar",
+      "country": "Germany",
+      "country_code": "DE",
+      "region": "Thuringia",
+      "timezone": "Europe/Berlin"
     }
   ]
 }
