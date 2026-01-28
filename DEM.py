@@ -4076,10 +4076,9 @@ def _dirichlet_nodes_from_tris(tris_u: np.ndarray):
     return np.unique(t.astype(int))
 
 
-def fem_poisson_T3(pts, tris, seg_u, ubar_expr: str, f_expr: str | None, device_for_eval="cpu"):
+def fem_poisson_T3(pts, tris, seg_u, ubar_expr: str, f_expr: str | None, seg_t=None, g_expr: str | None = None, g_const: float = 0.0, device_for_eval="cpu"):
     """
-    Solve: -Δu = f in Ω, u = ubar on Gamma_u
-    (No Neumann term here; if you need, we can add Gamma_t flux similarly.)
+    Solve: -Δu = f in Ω, u = ubar on Gamma_u, ∂u/∂n = g on Gamma_t
     """
     n = pts.shape[0]
     rows, cols, data = [], [], []
@@ -4118,6 +4117,24 @@ def fem_poisson_T3(pts, tris, seg_u, ubar_expr: str, f_expr: str | None, device_
             b[idx[a]] += fe[a]
             for c in range(3):
                 rows.append(idx[a]); cols.append(idx[c]); data.append(Ke[a, c])
+
+    # Neumann boundary term on Gamma_t: ∫ g v dΓ
+    if seg_t is not None and seg_t.size > 0:
+        for (j0, j1) in seg_t:
+            x0, y0 = pts[j0]; x1, y1 = pts[j1]
+            length = np.sqrt((x1-x0)**2 + (y1-y0)**2)
+            if length < 1e-14:
+                continue
+            xc = (x0 + x1) / 2.0
+            yc = (y0 + y1) / 2.0
+            if g_expr and str(g_expr).strip():
+                gv = float(eval_expr_numpy_via_torch(g_expr, np.array([xc]), np.array([yc]), device=device_for_eval)[0])
+            else:
+                gv = float(g_const)
+            # P1 on segment: consistent load -> gv*length/2 on each node
+            add = gv * length / 2.0
+            b[int(j0)] += add
+            b[int(j1)] += add
 
     K = sp.coo_matrix((data, (rows, cols)), shape=(n, n)).tocsr()
 
@@ -5001,6 +5018,9 @@ def fem_poisson_mixed_T3_Q4(
     seg_u,
     ubar_expr: str,
     f_expr: str | None,
+    seg_t=None,
+    g_expr: str | None = None,
+    g_const: float = 0.0,
     *,
     gauss_n_quad: int = 2,
     device_for_eval="cpu",
@@ -5009,6 +5029,7 @@ def fem_poisson_mixed_T3_Q4(
     Mixed FEM for Poisson:
     - Use T3 on the *original* triangles: tris_plot[:omega_triangles_n]
     - Use Q4 on quad elements
+    - Supports Neumann BC: ∂u/∂n = g on Gamma_t
     """
     n = pts.shape[0]
     rows, cols, data = [], [], []
@@ -5087,6 +5108,24 @@ def fem_poisson_mixed_T3_Q4(
                 b[idx[a]] += fe[a]
                 for c in range(4):
                     rows.append(idx[a]); cols.append(idx[c]); data.append(Ke[a, c])
+
+    # Neumann boundary term on Gamma_t: ∫ g v dΓ
+    if seg_t is not None and seg_t.size > 0:
+        for (j0, j1) in seg_t:
+            x0, y0 = pts[j0]; x1, y1 = pts[j1]
+            length = np.sqrt((x1-x0)**2 + (y1-y0)**2)
+            if length < 1e-14:
+                continue
+            xc = (x0 + x1) / 2.0
+            yc = (y0 + y1) / 2.0
+            if g_expr and str(g_expr).strip():
+                gv = float(eval_expr_numpy_via_torch(g_expr, np.array([xc]), np.array([yc]), device=device_for_eval)[0])
+            else:
+                gv = float(g_const)
+            # P1 on segment: consistent load -> gv*length/2 on each node
+            add = gv * length / 2.0
+            b[int(j0)] += add
+            b[int(j1)] += add
 
     K = sp.coo_matrix((data, (rows, cols)), shape=(n, n)).tocsr()
 
@@ -8709,6 +8748,9 @@ if res is not None:
                             seg_u=seg_u,
                             ubar_expr=ubar_expr,
                             f_expr=f_expr if f_expr.strip() else None,
+                            seg_t=seg_t if seg_t.size > 0 else None,
+                            g_expr=g_expr if g_expr.strip() else None,
+                            g_const=float(g_const),
                             gauss_n_quad=int(quad_gauss_n),
                             device_for_eval=str(device),
                         )
@@ -8717,6 +8759,9 @@ if res is not None:
                             pts=pts, tris=tris_plot, seg_u=seg_u,
                             ubar_expr=ubar_expr,
                             f_expr=f_expr if f_expr.strip() else None,
+                            seg_t=seg_t if seg_t.size > 0 else None,
+                            g_expr=g_expr if g_expr.strip() else None,
+                            g_const=float(g_const),
                             device_for_eval=str(device)
                         )
                     figUf = plot_field_on_mesh(pts, tris_plot, u_fem, title="FEM Solution u (T3/Q4) on Mesh Nodes", is_scalar=True)
