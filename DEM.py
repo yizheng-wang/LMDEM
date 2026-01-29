@@ -35,6 +35,7 @@ import scipy.sparse.linalg as spla
 import json
 import re
 
+import base64
 import io
 import math
 import time
@@ -498,6 +499,70 @@ def _call_llm(
     
     else:
         raise ValueError(f"Unsupported provider: {provider}")
+
+
+def _call_llm_with_image(
+    provider: LLMProvider,
+    model: str,
+    system: str,
+    user_text: str,
+    image_bytes: bytes | None = None,
+) -> str:
+    """
+    Like _call_llm but supports vision: when image_bytes is provided,
+    sends text + image to vision-capable models (OpenAI gpt-4o/gpt-4-vision, DeepSeek, etc.).
+    Falls back to text-only for providers/models that don't support images.
+    """
+    if not image_bytes:
+        return _call_llm(provider, model, system, user_text)
+
+    # Build data URL for image (OpenAI/DeepSeek use data:image/...;base64,...)
+    b64 = base64.standard_b64encode(image_bytes).decode("ascii")
+    # Guess mime from magic bytes
+    if image_bytes[:8][:2] == b"\xff\xd8":
+        mime = "image/jpeg"
+    elif image_bytes[:8][:4] == b"\x89PNG":
+        mime = "image/png"
+    else:
+        mime = "image/png"
+    data_url = f"data:{mime};base64,{b64}"
+
+    user_content = [
+        {"type": "text", "text": user_text},
+        {"type": "image_url", "image_url": {"url": data_url}},
+    ]
+
+    if provider == "openai":
+        key = _get_llm_api_key("openai")
+        if not key:
+            raise RuntimeError("OPENAI_API_KEY is not set.")
+        client = OpenAI(api_key=key)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+        )
+        return resp.choices[0].message.content
+
+    if provider == "deepseek":
+        key = _get_llm_api_key("deepseek")
+        if not key:
+            raise RuntimeError("DEEPSEEK_API_KEY is not set.")
+        client = OpenAI(api_key=key, base_url="https://api.deepseek.com")
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+        )
+        return resp.choices[0].message.content
+
+    # Fallback: ignore image and call text-only (anthropic, google, ollama)
+    return _call_llm(provider, model, system, user_text)
+
 
 def _parse_llm_geo_json(text: str) -> tuple[str, str]:
     """
@@ -1305,11 +1370,13 @@ def llm_generate_geo_from_nl(
     *,
     base_geo: str | None = None,
     base_nl: str | None = None,
+    image_bytes: bytes | None = None,
     provider: LLMProvider | None = None,
     model: str | None = None,
 ) -> tuple[str, str]:
     """
-    Returns (chat_text, geo_text)
+    Returns (chat_text, geo_text).
+    If image_bytes is provided, sends image + text to vision-capable LLM (OpenAI/DeepSeek).
     """
     # Get provider and model from session state if not provided
     if provider is None:
@@ -1401,8 +1468,13 @@ def llm_generate_geo_from_nl(
         f"Target geometry dimension: {geo_dim}D\n"
         f"Default mesh size: lc={default_lc}\n"
     )
+    if image_bytes:
+        user += "\n(The user also provided an image; use it to infer geometry shape/sketch if relevant.)\n"
 
-    response_text = _call_llm(provider, model, system, user)
+    if image_bytes:
+        response_text = _call_llm_with_image(provider, model, system, user, image_bytes)
+    else:
+        response_text = _call_llm(provider, model, system, user)
     chat, geo = _parse_llm_geo_json(response_text)
 
     return chat, geo
@@ -6268,10 +6340,11 @@ with st.sidebar:
             else:
                 ubarx_const = st.slider("Constant ūx", -10.0, 10.0, 0.0, 0.1)
                 ubary_const = st.slider("Constant ūy", -10.0, 10.0, 0.0, 0.1)
+                if _codim >= 3:
+                    ubarz_const = st.slider("Constant ūz", -10.0, 10.0, 0.0, 0.1)
                 ubarx_expr = st.text_input("Or expr ūx(x,y,z) =", value="")
                 ubary_expr = st.text_input("Or expr ūy(x,y,z) =", value="")
                 if _codim >= 3:
-                    ubarz_const = st.slider("Constant ūz", -10.0, 10.0, 0.0, 0.1)
                     ubarz_expr = st.text_input("Or expr ūz(x,y,z) =", value="")
         else:
             st.subheader("Mechanics Dirichlet ū on Gamma_u")
@@ -6810,6 +6883,19 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
                 avatar = "🧑" if role == "user" else "🤖"
                 with st.chat_message(role, avatar=avatar):
                     st.markdown(m.get("content", ""))
+                    if m.get("image_bytes_b64"):
+                        img_data = base64.standard_b64decode(m["image_bytes_b64"])
+                        st.image(io.BytesIO(img_data), caption="Attached image", use_container_width=True)
+
+        # Multimodal: optional image upload (vision models use it to infer geometry)
+        geo_img_upload = st.file_uploader(
+            "📷 Attach image (optional)",
+            type=["png", "jpg", "jpeg"],
+            key="geo_chat_image_upload",
+            help="Upload a sketch or diagram; OpenAI gpt-4o / DeepSeek vision will use it with your text.",
+        )
+        if geo_img_upload is not None:
+            st.session_state["geo_chat_pending_image"] = geo_img_upload.read()
 
         # Chat input (single, global chat input in Streamlit)
         user_msg = st.chat_input("Describe geometry + BC… (press Enter to send)", disabled=(not _llm_ready))
@@ -6854,6 +6940,16 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
             f"- Gamma_t location: {bc_gamma_t}\n"
         )
 
+    def _get_last_user_image_bytes() -> bytes | None:
+        """From geo_messages, get the image bytes of the most recent user message that had an image (for regenerate/repair)."""
+        for m in reversed(st.session_state.get("geo_messages", [])):
+            if m.get("role") == "user" and m.get("image_bytes_b64"):
+                try:
+                    return base64.standard_b64decode(m["image_bytes_b64"])
+                except Exception:
+                    return None
+        return None
+
     if prompt_to_send and (not _llm_ready):
         # Should be unreachable if chat_input is disabled, but keep it safe.
         current_provider = st.session_state.get("llm_provider", "openai")
@@ -6872,18 +6968,24 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
 
     if prompt_to_send:
         _geo_chat_maybe_autotitle(prompt_to_send)
-        st.session_state["geo_messages"].append({"role": "user", "content": prompt_to_send})
+        image_bytes = st.session_state.pop("geo_chat_pending_image", None)
+        user_content = prompt_to_send + (" [📷 Image attached]" if image_bytes else "")
+        user_msg_obj = {"role": "user", "content": user_content}
+        if image_bytes:
+            user_msg_obj["image_bytes_b64"] = base64.standard_b64encode(image_bytes).decode("ascii")
+        st.session_state["geo_messages"].append(user_msg_obj)
         # Inject explicit boundary placement to avoid sticky defaults
         nl_for_llm = (prompt_to_send or "") + _bc_directive_text()
         base_geo_for_llm = st.session_state.get("geo_text", "") if bool(use_geo_context) else ""
         try:
-            with st.spinner("LLM is generating .geo..."):
+            with st.spinner("LLM is generating .geo..." + (" (with image)" if image_bytes else "")):
                 chat_text, geo_candidate = llm_generate_geo_from_nl(
                     nl_for_llm,
                     default_lc=float(st.session_state.get("lc_ui", 0.15)),
                     geo_dim=int(geo_dim),
                     base_geo=base_geo_for_llm,
                     base_nl=st.session_state.get("last_llm_nl", ""),
+                    image_bytes=image_bytes,
                 )
         except Exception as e:
             st.session_state["geo_messages"].append({"role": "assistant", "content": f"❌ LLM call failed: {e}"})
@@ -7043,6 +7145,7 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
                                     geo_dim=int(geo_dim),
                                     base_geo="",  # Start fresh - no previous .geo
                                     base_nl="",   # Start fresh - no previous NL context
+                                    image_bytes=_get_last_user_image_bytes(),
                                 )
                                 if chat_regen and chat_regen.strip():
                                     st.session_state["geo_messages"].append({"role": "assistant", "content": chat_regen})
@@ -7052,7 +7155,7 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
                                 {"role": "assistant", "content": f"❌ Regeneration failed: {str(e_regen)}"}
                             )
                             continue
-                    
+
                     # Repair attempts within this round
                     for repair_attempt in range(1, _repairs_per_round + 1):
                         with st.spinner(f"Round {round_num}/{_max_regeneration_rounds}, Repair {repair_attempt}/{_repairs_per_round}..."):
@@ -7101,6 +7204,7 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
                         geo_dim=int(geo_dim),
                         base_geo="",
                         base_nl=st.session_state.get("last_llm_nl", ""),
+                        image_bytes=_get_last_user_image_bytes(),
                     )
                 ok3, msg3 = validate_geo_text(geo_new, require_gamma_t=require_gt, dim=int(geo_dim))
                 st.session_state["geo_messages"].append(
@@ -7245,6 +7349,7 @@ with st.expander("Ready when you are（LLM for geometry generation）", expanded
                                 geo_dim=int(geo_dim),
                                 base_geo="",  # Start fresh - no previous .geo
                                 base_nl="",   # Start fresh - no previous NL context
+                                image_bytes=_get_last_user_image_bytes(),
                             )
                             if chat_regen and chat_regen.strip():
                                 st.session_state["geo_messages"].append({"role": "assistant", "content": chat_regen})
