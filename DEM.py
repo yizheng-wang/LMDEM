@@ -239,15 +239,21 @@ def get_and_increment_visit_count() -> tuple[int, dict]:
         else:
             count = 0
     except Exception:
+        # On read error, do not assume 0 (would overwrite with 1 and "reset" count)
         count = 0
     
-    # Increment count
-    count += 1
+    # Increment count for this session's display
+    new_count = count + 1
     
-    # Save updated count
+    # Save updated count only if we're not decreasing (avoids sudden drops from
+    # race conditions, read errors, or file overwrites from deploy/git)
     try:
+        if count_file.exists():
+            with open(count_file, 'r', encoding='utf-8') as f:
+                current_on_disk = json.load(f).get('total_visits', 0)
+            new_count = max(new_count, current_on_disk)
         with open(count_file, 'w', encoding='utf-8') as f:
-            json.dump({'total_visits': count}, f, indent=2)
+            json.dump({'total_visits': new_count}, f, indent=2)
     except Exception:
         pass
     
@@ -287,7 +293,7 @@ def get_and_increment_visit_count() -> tuple[int, dict]:
             pass
     
     location_info = location if location else {'ip': ip, 'error': 'Location unavailable'}
-    return count, location_info
+    return new_count, location_info
 
 
 def load_visitor_locations() -> list[dict]:
@@ -653,6 +659,13 @@ else:
 
 st.title("🤩 Deep Energy Method based on LLM")
 st.caption("The author is Yizheng Wang, email: wang-yz19@tsinghua.org.cn")
+st.caption("If you find this work useful, please cite the paper:")
+st.code(r"""@article{wang2026deepenergymethodlarge,
+  title={Deep Energy Method with Large Language Model assistance: an open-source Streamlit-based platform for solving variational PDEs},
+  author={Wang, Yizheng and Anitescu, Cosmin and Eshaghi, Mohammad Sadegh and Zhuang, Xiaoying and Rabczuk, Timon and Liu, Yinghua},
+  journal={arXiv preprint arXiv:2602.07838},
+  year={2026}
+}""", language=None)
 st.caption(f"📊 Total visits: {total_visits:,}")
 
 # Visitor location map

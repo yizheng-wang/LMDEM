@@ -3,6 +3,20 @@
 This is a Streamlit app for DEM (Deep Energy Method): load/generate a Gmsh mesh (`.msh`), train on mesh quadrature points, and export results to ParaView (`.vtu`).
 
 The author is Yizheng Wang, email: wang-yz19@tsinghua.org.cn
+
+#### Citation (BibTeX)
+
+If you find this work useful, please cite the paper:
+
+```bibtex
+@article{wang2026deepenergymethodlarge,
+  title={Deep Energy Method with Large Language Model assistance: an open-source Streamlit-based platform for solving variational PDEs},
+  author={Wang, Yizheng and Anitescu, Cosmin and Eshaghi, Mohammad Sadegh and Zhuang, Xiaoying and Rabczuk, Timon and Liu, Yinghua},
+  journal={arXiv preprint arXiv:2602.07838},
+  year={2026}
+}
+```
+
 ---
 
 ### 1) Install & Run
